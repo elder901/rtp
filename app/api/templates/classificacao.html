@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block conteudo %}
+<div class="card" style="border-top-left-radius:0">
+  <h2>Classificação tributária (CBS/IBS) por produto</h2>
+  <p class="suave">Ordem usada no cálculo: <b>ajuste manual</b> (por código do produto ou por NCM) → <b>grupo IBSCBS
+    do XML</b> → <b>padrão 000/000001</b> (tributação integral). Preencha CST e cClassTrib só onde quiser ajustar;
+    deixe em branco para remover o ajuste. Cada ajuste é conferido na Calculadora RTC ao salvar.</p>
+  <div class="acoes">
+    <input id="filtro" placeholder="Filtrar por código, descrição ou NCM" style="max-width:320px">
+    <label class="check"><input type="checkbox" id="so-padrao"> Só os que estão no padrão</label>
+    <a class="botao secundario" href="/empresas/{{ e.id }}/classificacao.csv">Exportar CSV</a>
+    <form method="post" action="/empresas/{{ e.id }}/classificacao/csv" enctype="multipart/form-data" class="acoes" style="margin:0">
+      <input type="file" name="arquivo" accept=".csv" required style="max-width:220px">
+      <button type="submit" class="secundario">Importar CSV</button>
+    </form>
+  </div>
+</div>
+
+{% if not situacoes %}<div class="alerta">Calculadora indisponível: a lista de códigos e a validação não puderam ser carregadas.</div>{% endif %}
+
+<form method="post" action="/empresas/{{ e.id }}/classificacao" class="card">
+  <div class="tabela"><table id="tabela">
+    <tr><th class="txt">Produto</th><th class="txt">NCM</th><th class="txt">Dir.</th><th>Valor</th>
+        <th class="txt">Em uso</th><th class="txt">Sugestão</th><th class="txt">Ajustar por</th><th class="txt">CST</th>
+        <th class="txt">cClassTrib</th><th class="txt">Validação</th></tr>
+    {% for p in produtos %}
+    {% set ajuste = ajustes.get(p.chave_manual) if p.chave_manual else none %}
+    <tr data-origem="{{ p.origem }}" data-busca="{{ (p.codigo ~ ' ' ~ p.descricao ~ ' ' ~ p.ncm)|lower }}">
+      <td class="txt quebra">{{ p.codigo }} · {{ p.descricao }}
+        <input type="hidden" name="codigo" value="{{ p.codigo }}"><input type="hidden" name="ncm" value="{{ p.ncm }}">
+        <input type="hidden" name="chave_atual" value="{{ p.chave_manual }}"></td>
+      <td class="txt">{{ p.ncm }}</td><td class="txt">{{ p.direcao }}</td><td>{{ p.valor|brl }}</td>
+      <td class="txt">{{ p.cst }}/{{ p.cclasstrib }} <span class="tag {{ p.origem }}">{{ p.origem }}</span></td>
+      <td class="txt">{% if p.sugestao %}<span title="{{ p.sugestao_fonte }}">{{ p.sugestao[0] }}/{{ p.sugestao[1] }}</span>
+        <button type="button" class="mini secundario usar" data-cst="{{ p.sugestao[0] }}" data-cct="{{ p.sugestao[1] }}">usar</button>{% else %}—{% endif %}</td>
+      <td><select name="escopo">
+        <option value="codigo" {{ 'selected' if p.chave_manual != p.ncm or not p.chave_manual }}>código</option>
+        <option value="ncm" {{ 'selected' if p.chave_manual and p.chave_manual == p.ncm }}>NCM</option></select></td>
+      <td><input name="cst" value="{{ p.cst if p.origem == 'manual' }}" list="lista-cst" size="4" maxlength="3"></td>
+      <td><input name="cclasstrib" value="{{ p.cclasstrib if p.origem == 'manual' }}" list="lista-cct" size="7" maxlength="6"></td>
+      <td class="txt quebra">{% if ajuste %}{% if ajuste.validacao %}<span class="sobe">{{ ajuste.validacao }}</span>{% else %}<span class="desce">ok</span>{% endif %}{% endif %}</td>
+    </tr>
+    {% else %}<tr><td colspan="10" class="txt suave">Nenhum produto: importe notas primeiro.</td></tr>{% endfor %}
+  </table></div>
+  {% if produtos %}<div class="acoes"><button type="submit">Salvar e validar</button></div>{% endif %}
+</form>
+
+<datalist id="lista-cst">{% for cst, s in situacoes.items() %}<option value="{{ cst }}">{{ s.descricao }}</option>{% endfor %}</datalist>
+<datalist id="lista-cct">{% for cst, s in situacoes.items() %}{% for cod, desc in s.classificacoes.items() %}
+  <option value="{{ cod }}">{{ cst }} · {{ desc[:90] }}</option>{% endfor %}{% endfor %}</datalist>
+
+<script>
+  const filtro = document.getElementById('filtro'), soPadrao = document.getElementById('so-padrao');
+  function filtrar() {
+    const q = filtro.value.trim().toLowerCase();
+    document.querySelectorAll('#tabela tr[data-busca]').forEach(tr => {
+      tr.hidden = (q && !tr.dataset.busca.includes(q)) || (soPadrao.checked && tr.dataset.origem !== 'padrao');
+    });
+  }
+  filtro.addEventListener('input', filtrar); soPadrao.addEventListener('change', filtrar);
+  document.querySelectorAll('button.usar').forEach(b => b.addEventListener('click', () => {
+    const tr = b.closest('tr');
+    tr.querySelector('input[name=cst]').value = b.dataset.cst;
+    tr.querySelector('input[name=cclasstrib]').value = b.dataset.cct;
+  }));
+</script>
+{% endblock %}

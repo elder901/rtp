@@ -56,11 +56,38 @@ class CalculadoraRTC:
         self.base_url = (base_url or settings.calculadora_url).rstrip("/")
         self.http = client or httpx.Client(timeout=settings.calculadora_timeout)
         self._cache: dict[Chave, AliquotaEfetiva] = {}
+        self._cache_dados: dict[tuple, object] = {}
+
+    def _dados_abertos(self, caminho: str, **params):
+        try:
+            r = self.http.get(f"{self.base_url}/calculadora/dados-abertos/{caminho}", params=params)
+        except httpx.HTTPError as e:
+            raise ErroCalculadora(f"falha de comunicação com a calculadora: {e}") from e
+        if r.status_code != 200:
+            raise ErroCalculadora(f"HTTP {r.status_code} em {caminho}: {r.text[:200]}")
+        return r.json()
 
     def versao(self) -> dict:
-        r = self.http.get(f"{self.base_url}/calculadora/dados-abertos/versao")
-        r.raise_for_status()
-        return r.json()
+        return self._dados_abertos("versao")
+
+    def situacoes_tributarias(self, data: str = "2027-01-01") -> dict[str, dict]:
+        """CST -> {descricao, classificacoes: {cClassTrib: descricao}} válidos para NF-e na data."""
+        chave = ("situacoes", data)
+        if chave not in self._cache_dados:
+            lista = self._dados_abertos("situacoes-tributarias/cbs-ibs", siglaDfe="NFE", data=data)
+            self._cache_dados[chave] = {
+                s["codigo"]: {"descricao": s["descricao"],
+                              "classificacoes": {c["codigo"]: c["descricao"] for c in s["classificacoesTributarias"]}}
+                for s in lista}
+        return self._cache_dados[chave]
+
+    def ncm_aplicavel(self, cclasstrib: str, ncm: str, data: str = "2027-01-01") -> bool:
+        chave = ("ncm", cclasstrib, ncm, data)
+        if chave not in self._cache_dados:
+            self._cache_dados[chave] = bool(self._dados_abertos(
+                "classificacoes-tributarias/ncm-aplicavel", cClassTrib=cclasstrib, ncm=ncm,
+                dataOcorrenciaFatoGerador=data).get("valido"))
+        return self._cache_dados[chave]
 
     def aliquotas(self, chaves: set[Chave], nominais_por_ano: dict[int, dict[str, float]],
                   uf: str, municipio: int) -> dict[Chave, AliquotaEfetiva]:

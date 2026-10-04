@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block conteudo %}
+<div class="card" style="border-top-left-radius:0">
+  <h2>Notas fiscais</h2>
+  <div class="tabela"><table>
+    <tr><th class="txt">Direção</th><th class="txt">Origem</th><th>Notas completas</th><th class="txt">Primeira</th><th class="txt">Última</th></tr>
+    {% for direcao, origem, n, primeira, ultima in por_origem %}
+    <tr><td>{{ 'saída' if direcao == 'saida' else direcao }}</td><td class="txt">{{ 'SEFAZ (DF-e)' if origem == 'dfe' else 'arquivo' }}</td><td>{{ n }}</td>
+        <td class="txt">{{ primeira.strftime('%d/%m/%Y') if primeira else '—' }}</td>
+        <td class="txt">{{ ultima.strftime('%d/%m/%Y') if ultima else '—' }}</td></tr>
+    {% else %}<tr><td colspan="5" class="txt suave">Nenhuma nota ainda. Sincronize com a SEFAZ ou importe XMLs.</td></tr>{% endfor %}
+  </table></div>
+  {% if situacoes.get('resumo') or situacoes.get('cancelado') %}
+  <p class="suave">{{ situacoes.get('resumo', 0) }} nota(s) só com resumo (sem XML completo) ·
+    {{ situacoes.get('cancelado', 0) }} cancelada(s) — ambas ficam fora da análise.</p>
+  {% endif %}
+</div>
+
+<div class="colunas">
+  <div class="card">
+    <h2>SEFAZ — distribuição DF-e</h2>
+    {% if e.certificado %}
+      <p>Certificado: <b>{{ e.certificado.titular }}</b><br>
+        <span class="suave">válido até {{ e.certificado.validade.strftime('%d/%m/%Y') }}</span></p>
+      {% set c = e.controle_dfe %}
+      {% if c %}
+      <p class="suave">Último NSU {{ c.ult_nsu }} de {{ c.max_nsu }} ·
+        {{ c.ultimo_status }} {{ c.ultimo_motivo }}<br>
+        {% if c.proxima_consulta %}Próxima consulta permitida: {{ c.proxima_consulta.strftime('%d/%m %H:%M') }}{% endif %}</p>
+      {% endif %}
+      <form method="post" action="/empresas/{{ e.id }}/dfe"><button type="submit">Sincronizar agora</button></form>
+      <p class="suave">A SEFAZ entrega as notas em que a empresa é destinatária (entradas). As notas de saída vêm
+        por importação de XML.</p>
+    {% else %}
+      <p class="suave">Envie o certificado A1 (.pfx) para baixar automaticamente as notas de entrada.</p>
+    {% endif %}
+    <h3>{{ 'Trocar' if e.certificado else 'Enviar' }} certificado A1</h3>
+    <form method="post" action="/empresas/{{ e.id }}/certificado" enctype="multipart/form-data">
+      <div class="grade">
+        <div><label>Arquivo .pfx / .p12</label><input type="file" name="pfx" accept=".pfx,.p12" required></div>
+        <div><label>Senha</label><input type="password" name="senha" autocomplete="off"></div>
+      </div>
+      <div class="acoes"><button type="submit" class="secundario">Gravar certificado</button></div>
+      <p class="suave">O certificado e a senha são guardados cifrados.</p>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Importar XMLs</h2>
+    <p class="suave">NF-e/NFC-e de entrada e saída, soltos ou em ZIP. Notas repetidas são ignoradas.</p>
+    <form method="post" action="/empresas/{{ e.id }}/xmls" enctype="multipart/form-data">
+      <input type="file" name="xmls" multiple accept=".xml,.zip" required>
+      <div class="acoes"><button type="submit">Importar</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Dados e premissas</h2>
+  <form method="post" action="/empresas/{{ e.id }}/dados">
+    <div class="grade">
+      <div><label>Regime atual</label><select name="regime">
+        {% for v, t in [('real','Lucro Real'),('presumido','Lucro Presumido'),('simples','Simples Nacional')] %}
+        <option value="{{ v }}" {{ 'selected' if e.regime == v }}>{{ t }}</option>{% endfor %}</select></div>
+      <div><label>UF</label><input name="uf" value="{{ e.uf }}" maxlength="2" required></div>
+      <div><label>Município (IBGE)</label><input name="municipio" type="number" value="{{ e.cod_municipio }}" required></div>
+      <div><label>Ambiente SEFAZ</label><select name="ambiente_dfe">
+        <option value="1" {{ 'selected' if e.ambiente_dfe == 1 }}>Produção</option>
+        <option value="2" {{ 'selected' if e.ambiente_dfe == 2 }}>Homologação</option></select></div>
+    </div>
+    <div class="grade" style="margin-top:12px">
+      <div><label class="check"><input type="checkbox" name="industria" value="true" {{ 'checked' if e.industria }}> Indústria (credita IPI)</label></div>
+      <div style="grid-column:span 2"><label class="check"><input type="checkbox" name="manifestar_ciencia" value="true" {{ 'checked' if e.manifestar_ciencia }}>
+        Manifestar Ciência da Operação automaticamente para obter o XML completo das notas recebidas só como resumo</label>
+        <span class="suave">A ciência é um evento oficial registrado na SEFAZ em nome da empresa.</span></div>
+    </div>
+    <h3>Premissas da simulação</h3>
+    <div class="grade">
+      <div><label>CBS referência (%)</label><input name="cbs_referencia" value="{{ premissas.cbs_referencia }}"></div>
+      <div><label>IBS UF referência (%)</label><input name="ibs_uf_referencia" value="{{ premissas.ibs_uf_referencia }}"></div>
+      <div><label>IBS município referência (%)</label><input name="ibs_mun_referencia" value="{{ premissas.ibs_mun_referencia }}"></div>
+      <div><label>Crédito de fornecedor do Simples (%)</label><input name="credito_fornecedor_simples_pct" value="{{ premissas.credito_fornecedor_simples_pct }}"></div>
+      <div><label>Crédito de fornecedor MEI (%)</label><input name="credito_fornecedor_mei_pct" value="{{ premissas.credito_fornecedor_mei_pct }}"></div>
+      <div><label>DAS efetivo (só Simples, %)</label><input name="aliquota_das_pct" value="{{ premissas.aliquota_das_pct }}"></div>
+    </div>
+    <div class="acoes"><button type="submit">Salvar</button></div>
+  </form>
+</div>
+{% endblock %}

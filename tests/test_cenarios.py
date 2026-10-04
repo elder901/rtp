@@ -3,32 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from app.calculadora.client import AliquotaEfetiva
 from app.engine.cenarios import Empresa, analisar
 from app.engine.premissas import Premissas
 from app.ingest.arquivos import ler_caminho
 from app.relatorios import agregacao
 from app.relatorios.excel import exportar
+from tests.conftest import CalculadoraFake
 
 FX = Path(__file__).parent / "fixtures" / "xml"
-
-
-class CalculadoraFake:
-    """Imita a calculadora: cClassTrib 200003 (cesta básica) tem redução de 100%; o resto é integral."""
-
-    def __init__(self):
-        self.chaves = set()
-
-    def aliquotas(self, chaves, nominais_por_ano, uf, municipio):
-        self.chaves |= chaves
-        out = {}
-        for c in chaves:
-            n = nominais_por_ano[c.ano]
-            if c.cclasstrib == "200003":
-                out[c] = AliquotaEfetiva(D(0), D(0), D(0), D(100))
-            else:
-                out[c] = AliquotaEfetiva(D(str(n["cbs"])), D(str(n["ibsEstadual"])), D(str(n["ibsMunicipal"])), D(0))
-        return out
 
 
 @pytest.fixture

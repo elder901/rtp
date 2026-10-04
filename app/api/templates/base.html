@@ -5,33 +5,71 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RTP — Reforma Tributária</title>
 <style>
-  :root { --fundo:#f6f7f9; --card:#fff; --texto:#1c2430; --suave:#5b6675; --borda:#e1e5ea;
-          --azul:#1f3864; --sobe:#b42318; --desce:#067647; }
+  :root { color-scheme: light; --fundo:#f6f7f9; --card:#fff; --texto:#1c2430; --suave:#5b6675; --borda:#e1e5ea;
+          --azul:#1f3864; --serie:#2a78d6; --neutro:#a8acb3; --grade:#e8ebef; --sobe:#b42318; --desce:#067647;
+          --aviso-fundo:#fffaeb; --aviso-borda:#fedf89; --tag:#eef2f6; }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) { color-scheme: dark; --fundo:#121417; --card:#1a1c20; --texto:#eceef1;
+      --suave:#a3abb7; --borda:#2c3038; --azul:#24406f; --serie:#3987e5; --neutro:#6b7079; --grade:#262a31;
+      --sobe:#f97066; --desce:#47cd89; --aviso-fundo:#2a2414; --aviso-borda:#5c4a17; --tag:#262a31; }
+  }
   * { box-sizing:border-box; }
   body { margin:0; font:14px/1.5 system-ui, "Segoe UI", sans-serif; background:var(--fundo); color:var(--texto); }
   header { background:var(--azul); color:#fff; padding:14px 24px; }
   header a { color:#fff; text-decoration:none; font-weight:600; }
-  main { max-width:1200px; margin:0 auto; padding:24px 16px; }
+  main { max-width:1240px; margin:0 auto; padding:24px 16px; }
+  a { color:var(--serie); }
   .card { background:var(--card); border:1px solid var(--borda); border-radius:8px; padding:20px; margin-bottom:20px; }
-  h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:16px; margin:0 0 12px; }
+  h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:16px; margin:0 0 12px; } h3 { font-size:14px; margin:16px 0 8px; }
   .suave { color:var(--suave); }
   .grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
+  .colunas { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:20px; }
   label { display:block; font-weight:600; font-size:13px; margin-bottom:4px; }
-  input, select { width:100%; padding:8px; border:1px solid var(--borda); border-radius:6px; font:inherit; }
-  button, .botao { background:var(--azul); color:#fff; border:0; border-radius:6px; padding:10px 18px; font:inherit;
+  label.check { display:flex; gap:8px; align-items:center; font-weight:500; }
+  input, select { width:100%; padding:8px; border:1px solid var(--borda); border-radius:6px; font:inherit;
+                  background:var(--card); color:var(--texto); }
+  input[type=checkbox] { width:auto; }
+  table input, table select { padding:4px 6px; }
+  table select { min-width:88px; }
+  table input[name=cst] { width:60px; } table input[name=cclasstrib] { width:90px; }
+  button, .botao { background:var(--azul); color:#fff; border:0; border-radius:6px; padding:9px 16px; font:inherit;
                    font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; }
+  button.secundario, .botao.secundario { background:transparent; color:var(--serie); border:1px solid var(--borda); }
+  button.mini { padding:3px 8px; font-size:12px; }
+  .acoes { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
+  .abas { display:flex; gap:4px; margin:12px 0 0; flex-wrap:wrap; }
+  .abas a { padding:8px 14px; border-radius:6px 6px 0 0; text-decoration:none; color:var(--suave); font-weight:600; }
+  .abas a.ativa { background:var(--card); color:var(--texto); border:1px solid var(--borda); border-bottom-color:var(--card); }
   .tabela { overflow-x:auto; }
   table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
   th, td { padding:6px 10px; border-bottom:1px solid var(--borda); text-align:right; white-space:nowrap; }
   th { font-size:12px; color:var(--suave); font-weight:600; }
   th:first-child, td:first-child, td.txt, th.txt { text-align:left; }
+  td.quebra { white-space:normal; min-width:200px; }
   .sobe { color:var(--sobe); font-weight:600; } .desce { color:var(--desce); font-weight:600; }
-  .alerta { background:#fffaeb; border:1px solid #fedf89; border-radius:6px; padding:8px 12px; margin:6px 0; }
-  .tag { font-size:11px; padding:1px 6px; border-radius:10px; background:#eef2f6; color:var(--suave); }
+  .alerta { background:var(--aviso-fundo); border:1px solid var(--aviso-borda); border-radius:6px; padding:8px 12px; margin:6px 0; }
+  .tag { font-size:11px; padding:1px 6px; border-radius:10px; background:var(--tag); color:var(--suave); }
+  .tag.padrao { background:var(--aviso-fundo); }
+  .grafico { position:relative; }
+  .grafico svg { width:100%; height:auto; display:block; }
+  .dica { position:absolute; pointer-events:none; background:var(--card); border:1px solid var(--borda); border-radius:6px;
+          padding:6px 10px; font-size:12px; box-shadow:0 2px 8px rgba(0,0,0,.12); display:none; white-space:nowrap; }
 </style>
 </head>
 <body>
 <header><a href="/">RTP · Planejamento da Reforma Tributária</a></header>
-<main>{% block conteudo %}{% endblock %}</main>
+<main>
+{% if e is defined %}
+  <h1>{{ e.nome }}</h1>
+  <p class="suave" style="margin:0">CNPJ {{ e.cnpj }} · {{ {'real':'Lucro Real','presumido':'Lucro Presumido','simples':'Simples Nacional'}[e.regime] }} · {{ e.uf }}</p>
+  <nav class="abas">
+    <a href="/empresas/{{ e.id }}" class="{{ 'ativa' if aba == 'geral' }}">Dados e notas</a>
+    <a href="/empresas/{{ e.id }}/classificacao" class="{{ 'ativa' if aba == 'classificacao' }}">Classificação</a>
+    <a href="/empresas/{{ e.id }}/analise" class="{{ 'ativa' if aba == 'analise' }}">Análise</a>
+  </nav>
+{% endif %}
+{% if avisos %}<div class="card">{% for t in avisos %}<div class="alerta">{{ t }}</div>{% endfor %}</div>{% endif %}
+{% block conteudo %}{% endblock %}
+</main>
 </body>
 </html>

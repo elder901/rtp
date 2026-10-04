@@ -48,7 +48,7 @@ class Premissas:
     aliquota_das_pct: Decimal = D("6.0")
     # Empresa industrial credita IPI hoje.
     industria: bool = False
-    anos: list[int] = field(default_factory=lambda: [2027, 2029, 2033])
+    anos: list[int] = field(default_factory=lambda: list(TRANSICAO))
 
     def aliquotas_nominais(self, ano: int) -> dict[str, float]:
         """Alíquotas nominais (%) a enviar à calculadora para o ano informado."""

@@ -1,31 +1,67 @@
 {% extends "base.html" %}
 {% macro var(v) -%}
   {%- if v is none %}<span class="suave">—</span>
-  {%- elif v > 0 %}<span class="sobe">+{{ v }}%</span>
-  {%- elif v < 0 %}<span class="desce">{{ v }}%</span>
+  {%- elif v > 0 %}<span class="sobe">+{{ v|pct }}</span>
+  {%- elif v < 0 %}<span class="desce">{{ v|pct }}</span>
   {%- else %}0%{% endif -%}
 {%- endmacro %}
 {% block conteudo %}
-<div class="card">
-  <h1>{{ a.empresa.nome }}</h1>
-  <p class="suave">CNPJ {{ a.empresa.cnpj }} · {{ a.empresa.regime|capitalize }} · {{ a.empresa.uf }} ·
-    {{ info.lidos }} NF-e lidas ({{ info.duplicados }} duplicadas) · {{ a.itens|length }} itens analisados</p>
-  <a class="botao" href="/analises/{{ id }}/excel">Baixar Excel completo</a>
+<div class="card" style="border-top-left-radius:0">
+  <form method="get" class="grade" style="align-items:end">
+    <div><label>Emissão de</label><input type="date" name="inicio" value="{{ inicio }}"></div>
+    <div><label>até</label><input type="date" name="fim" value="{{ fim }}"></div>
+    <div><label>Anos nas tabelas</label><input name="anos" value="{{ anos_texto }}" placeholder="2027,2029,2033"></div>
+    <div class="acoes" style="margin:0"><button type="submit">Atualizar</button>
+      <a class="botao secundario" href="/empresas/{{ e.id }}/analise/excel?inicio={{ inicio }}&fim={{ fim }}">Excel completo</a></div>
+  </form>
+  <p class="suave" style="margin-bottom:0">{{ a.itens|length }} itens analisados ·
+    CBS {{ a.premissas.cbs_referencia }}% · IBS {{ a.premissas.ibs_uf_referencia + a.premissas.ibs_mun_referencia }}% (premissas)</p>
 </div>
 
 {% if a.alertas %}
 <div class="card"><h2>Alertas</h2>{% for t in a.alertas %}<div class="alerta">{{ t }}</div>{% endfor %}</div>
 {% endif %}
 
+{% if grafico %}
 <div class="card">
-  <h2>Carga líquida da empresa (débitos nas saídas − créditos nas entradas)</h2>
+  <h2>Saldo a recolher por ano da transição</h2>
+  <p class="suave" style="margin-top:-8px">Débitos nas saídas menos créditos nas entradas. A linha tracejada marca o saldo atual.</p>
+  <div class="grafico" id="grafico">
+    <svg viewBox="0 0 {{ grafico.largura }} {{ grafico.altura }}" role="img" aria-label="Saldo a recolher por cenário">
+      {% for m in grafico.marcas %}
+      <line x1="{{ grafico.esq }}" x2="{{ grafico.dir }}" y1="{{ m.y }}" y2="{{ m.y }}" stroke="var(--grade)" stroke-width="1"/>
+      <text x="{{ grafico.esq - 8 }}" y="{{ m.y + 4 }}" text-anchor="end" font-size="11" fill="var(--suave)">{{ m.valor|brl }}</text>
+      {% endfor %}
+      <line x1="{{ grafico.esq }}" x2="{{ grafico.dir }}" y1="{{ grafico.zero }}" y2="{{ grafico.zero }}" stroke="var(--suave)" stroke-width="1"/>
+      {% for b in grafico.barras %}
+      <path d="{{ b.caminho }}" fill="{{ 'var(--neutro)' if b.atual else 'var(--serie)' }}"/>
+      {% if b.mostrar_valor %}<text x="{{ b.centro }}" y="{{ b.y_rotulo }}" text-anchor="middle" font-size="11" font-weight="600" fill="var(--texto)">{{ b.valor|brl }}</text>{% endif %}
+      <text x="{{ b.centro }}" y="{{ grafico.base }}" text-anchor="middle" font-size="12" fill="var(--suave)">{{ b.rotulo }}</text>
+      {% endfor %}
+      <line x1="{{ grafico.esq }}" x2="{{ grafico.dir }}" y1="{{ grafico.referencia }}" y2="{{ grafico.referencia }}"
+            stroke="var(--texto)" stroke-width="1" stroke-dasharray="4 4" opacity=".6"/>
+      {% for b in grafico.barras %}
+      <rect class="alvo" x="{{ b.alvo_x }}" y="0" width="{{ b.alvo_largura }}" height="{{ grafico.altura }}" fill="transparent"
+            data-rotulo="{{ b.rotulo }}" data-valor="{{ b.valor|brl }}"
+            data-dif="{{ '' if b.diferenca is none else (('+' if b.diferenca > 0 else '') ~ (b.diferenca|brl)) }}">
+        <title>{{ b.rotulo }}: {{ b.valor|brl }}</title></rect>
+      {% endfor %}
+    </svg>
+    <div class="dica" id="dica"></div>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Carga líquida da empresa</h2>
   <div class="tabela"><table>
-    <tr><th class="txt">Cenário</th><th>Vendas líquidas</th><th>Débitos</th><th>Créditos</th><th>Saldo a recolher</th>
-        <th>% sobre vendas</th><th>Diferença vs atual</th></tr>
+    <tr><th class="txt">Cenário</th><th>Vendas líquidas</th><th>Compras líquidas</th><th>Débitos</th><th>Créditos</th>
+        <th>Saldo a recolher</th><th>% sobre vendas</th><th>Diferença vs atual</th></tr>
     {% for l in resumo %}
-    <tr><td>{{ l.cenario }}</td><td>{{ l.vendas_liquidas|brl }}</td><td>{{ l.debitos|brl }}</td><td>{{ l.creditos|brl }}</td>
-        <td><b>{{ l.saldo_a_recolher|brl }}</b></td><td>{{ l.carga_sobre_vendas_pct if l.carga_sobre_vendas_pct is not none else '—' }}</td>
-        <td>{% if l.diferenca_vs_atual is none %}—{% elif l.diferenca_vs_atual > 0 %}<span class="sobe">+{{ l.diferenca_vs_atual|brl }}</span>{% else %}<span class="desce">{{ l.diferenca_vs_atual|brl }}</span>{% endif %}</td></tr>
+    <tr><td>{{ l.cenario }}</td><td>{{ l.vendas_liquidas|brl }}</td><td>{{ l.compras_liquidas|brl }}</td>
+        <td>{{ l.debitos|brl }}</td><td>{{ l.creditos|brl }}</td><td><b>{{ l.saldo_a_recolher|brl }}</b></td>
+        <td>{{ l.carga_sobre_vendas_pct|pct }}</td>
+        <td>{% if l.diferenca_vs_atual is none %}—{% elif l.diferenca_vs_atual > 0 %}<span class="sobe">+{{ l.diferenca_vs_atual|brl }}</span>{% elif l.diferenca_vs_atual < 0 %}<span class="desce">{{ l.diferenca_vs_atual|brl }}</span>{% else %}0{% endif %}</td></tr>
     {% endfor %}
   </table></div>
 </div>
@@ -34,26 +70,44 @@
   <h2>Por produto (saídas) — variação de preço para manter a receita líquida</h2>
   <div class="tabela"><table>
     <tr><th class="txt">Produto</th><th class="txt">NCM</th><th class="txt">cClassTrib</th><th>Valor líquido</th>
-        <th>Carga atual %</th>{% for ano in anos %}<th>Carga {{ ano }} %</th><th>Δ preço {{ ano }}</th>{% endfor %}</tr>
+        <th>Carga atual</th>{% for ano in anos %}<th>Carga {{ ano }}</th><th>Δ preço {{ ano }}</th>{% endfor %}</tr>
     {% for p in produtos %}
-    <tr><td class="txt">{{ p.codigo }} · {{ p.descricao }}</td><td class="txt">{{ p.ncm }}</td>
-        <td class="txt">{{ p.cclasstrib }} <span class="tag">{{ p.origem_classificacao }}</span></td>
-        <td>{{ p.valor_liquido|brl }}</td><td>{{ p.carga_atual_pct }}</td>
-        {% for ano in anos %}<td>{{ p['carga_%s_pct'|format(ano)] }}</td><td>{{ var(p['var_preco_%s_pct'|format(ano)]) }}</td>{% endfor %}</tr>
-    {% else %}<tr><td colspan="9" class="txt suave">Nenhuma saída no lote enviado.</td></tr>{% endfor %}
+    <tr><td class="txt quebra">{{ p.codigo }} · {{ p.descricao }}</td><td class="txt">{{ p.ncm }}</td>
+        <td class="txt">{{ p.cclasstrib }} <span class="tag {{ p.origem_classificacao }}">{{ p.origem_classificacao }}</span></td>
+        <td>{{ p.valor_liquido|brl }}</td><td>{{ p.carga_atual_pct|pct }}</td>
+        {% for ano in anos %}<td>{{ p['carga_%s_pct'|format(ano)]|pct }}</td><td>{{ var(p['var_preco_%s_pct'|format(ano)]) }}</td>{% endfor %}</tr>
+    {% else %}<tr><td colspan="9" class="txt suave">Nenhuma saída no período.</td></tr>{% endfor %}
   </table></div>
 </div>
 
 <div class="card">
   <h2>Por fornecedor (entradas) — custo efetivo após créditos</h2>
   <div class="tabela"><table>
-    <tr><th class="txt">Fornecedor</th><th class="txt">Regime</th><th>Valor líquido</th><th>Custo efetivo atual</th>
+    <tr><th class="txt">Fornecedor</th><th class="txt">Regime</th><th>Notas</th><th>Valor líquido</th><th>Custo atual</th>
         {% for ano in anos %}<th>Custo {{ ano }}</th><th>Δ {{ ano }}</th>{% endfor %}</tr>
     {% for f in fornecedores %}
     <tr><td class="txt">{{ f.nome }}<br><span class="suave">{{ f.cnpj }} · {{ f.uf }}</span></td><td class="txt">{{ f.regime }}</td>
-        <td>{{ f.valor_liquido|brl }}</td><td>{{ f.custo_efetivo_atual|brl }}</td>
+        <td>{{ f.notas }}</td><td>{{ f.valor_liquido|brl }}</td><td>{{ f.custo_efetivo_atual|brl }}</td>
         {% for ano in anos %}<td>{{ f['custo_efetivo_%s'|format(ano)]|brl }}</td><td>{{ var(f['var_custo_%s_pct'|format(ano)]) }}</td>{% endfor %}</tr>
-    {% else %}<tr><td colspan="9" class="txt suave">Nenhuma entrada no lote enviado.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="9" class="txt suave">Nenhuma entrada no período.</td></tr>{% endfor %}
   </table></div>
 </div>
+
+<script>
+  const g = document.getElementById('grafico'), dica = document.getElementById('dica');
+  if (g) {
+    g.querySelectorAll('rect.alvo').forEach(r => {
+      r.addEventListener('mousemove', ev => {
+        const caixa = g.getBoundingClientRect();
+        dica.innerHTML = `<b>${r.dataset.rotulo}</b><br>Saldo: R$ ${r.dataset.valor}` +
+          (r.dataset.dif ? `<br>vs atual: R$ ${r.dataset.dif}` : '');
+        dica.style.display = 'block';
+        const x = ev.clientX - caixa.left + 12;
+        dica.style.left = Math.min(x, caixa.width - dica.offsetWidth - 4) + 'px';
+        dica.style.top = (ev.clientY - caixa.top - 10) + 'px';
+      });
+      r.addEventListener('mouseleave', () => { dica.style.display = 'none'; });
+    });
+  }
+</script>
 {% endblock %}

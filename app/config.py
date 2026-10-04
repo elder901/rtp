@@ -11,7 +11,18 @@ class Settings(BaseSettings):
     calculadora_url: str = "https://consumo.tributos.gov.br/servico/calcular-tributos-consumo/api"
     calculadora_timeout: float = 60.0
 
-    database_url: str = "sqlite:///./rtp.db"
+    database_url: str = "sqlite:///./dados/rtp.db"
+
+    # DF-e: liga a sincronização automática dentro do servidor web (senão, use `python -m app.cli dfe`).
+    dfe_agendador: bool = False
+    dfe_intervalo_minutos: int = 15
+    dfe_timeout: float = 60.0
+    # Limite de consultas por chave (XML completo após Ciência) em cada sincronização.
+    dfe_max_consultas_chave: int = 10
+
+    # Proteção mínima da interface web até a fase 4 (login multi-cliente). Vazio = sem senha.
+    usuario: str = ""
+    senha: str = ""
 
 
 settings = Settings()

@@ -9,3 +9,4 @@ pydantic-settings>=2.4
 sqlalchemy>=2.0
 pytest>=8.0
 respx>=0.21
+cryptography>=43

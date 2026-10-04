@@ -1,11 +1,23 @@
 {% extends "base.html" %}
 {% block conteudo %}
 <div class="card">
-  <h1>Nova análise</h1>
-  <p class="suave">Envie os XMLs de NF-e de entrada e saída (soltos ou em ZIP). O cálculo de CBS/IBS usa a
-    Calculadora de Tributos RTC da Receita Federal.</p>
-  <form method="post" action="/analises" enctype="multipart/form-data">
-    <h2>Empresa</h2>
+  <h1>Empresas</h1>
+  {% if empresas %}
+  <div class="tabela"><table>
+    <tr><th class="txt">Empresa</th><th class="txt">CNPJ</th><th class="txt">Regime</th><th class="txt">UF</th>
+        <th>NF-e completas</th><th class="txt">Certificado A1</th></tr>
+    {% for l in empresas %}
+    <tr><td><a href="/empresas/{{ l.e.id }}">{{ l.e.nome }}</a></td><td class="txt">{{ l.e.cnpj }}</td>
+        <td class="txt">{{ l.e.regime }}</td><td class="txt">{{ l.e.uf }}</td><td>{{ l.notas }}</td>
+        <td class="txt">{{ ('até ' ~ l.cert.validade.strftime('%d/%m/%Y')) if l.cert else '—' }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<p class="suave">Nenhuma empresa cadastrada.</p>{% endif %}
+</div>
+
+<div class="card">
+  <h2>Nova empresa</h2>
+  <form method="post" action="/empresas">
     <div class="grade">
       <div><label>CNPJ</label><input name="cnpj" required></div>
       <div><label>Nome</label><input name="nome"></div>
@@ -14,23 +26,9 @@
           <option value="simples">Simples Nacional</option></select></div>
       <div><label>UF</label><input name="uf" maxlength="2" required></div>
       <div><label>Município (código IBGE)</label><input name="municipio" type="number" required></div>
-      <div><label><input type="checkbox" name="industria" value="true" style="width:auto"> Indústria (credita IPI)</label></div>
+      <div><label class="check" style="margin-top:28px"><input type="checkbox" name="industria" value="true"> Indústria (credita IPI)</label></div>
     </div>
-    <h2 style="margin-top:20px">Premissas</h2>
-    <div class="grade">
-      <div><label>CBS referência (%)</label><input name="cbs" value="{{ premissas.cbs_referencia }}"></div>
-      <div><label>IBS UF referência (%)</label><input name="ibs_uf" value="{{ premissas.ibs_uf_referencia }}"></div>
-      <div><label>IBS município referência (%)</label><input name="ibs_mun" value="{{ premissas.ibs_mun_referencia }}"></div>
-      <div><label>Crédito de fornecedor do Simples (%)</label><input name="credito_simples" value="{{ premissas.credito_fornecedor_simples_pct }}"></div>
-      <div><label>DAS efetivo (só Simples, %)</label><input name="das" value="{{ premissas.aliquota_das_pct }}"></div>
-    </div>
-    <h2 style="margin-top:20px">Arquivos</h2>
-    <div class="grade">
-      <div><label>XMLs ou ZIP</label><input type="file" name="xmls" multiple accept=".xml,.zip" required></div>
-      <div><label>Classificação manual (CSV opcional: codigo_ou_ncm;cst;cclasstrib)</label>
-        <input type="file" name="classificacao" accept=".csv"></div>
-    </div>
-    <p style="margin-top:20px"><button type="submit">Analisar</button></p>
+    <div class="acoes"><button type="submit">Cadastrar</button></div>
   </form>
 </div>
 {% endblock %}
