@@ -46,6 +46,7 @@
 <div class="card">
   <h2>Saldo a recolher por ano da transição</h2>
   <p class="suave" style="margin-top:-8px">Débitos nas saídas menos créditos nas entradas. A linha tracejada marca o saldo atual.</p>
+  <p class="suave so-celular" style="margin-top:-6px">Deslize o gráfico para o lado para ver todos os anos.</p>
   <div class="grafico" id="grafico">
     <svg viewBox="0 0 {{ grafico.largura }} {{ grafico.altura }}" role="img" aria-label="Saldo a recolher por cenário">
       {% for m in grafico.marcas %}
@@ -143,7 +144,7 @@
   const g = document.getElementById('grafico'), dica = document.getElementById('dica');
   if (g) {
     g.querySelectorAll('rect.alvo').forEach(r => {
-      r.addEventListener('mousemove', ev => {
+      const mostrar = ev => {
         const caixa = g.getBoundingClientRect();
         dica.innerHTML = `<b>${r.dataset.rotulo}</b><br>Saldo: R$ ${r.dataset.valor}` +
           (r.dataset.dif ? `<br>vs atual: R$ ${r.dataset.dif}` : '');
@@ -151,8 +152,10 @@
         const x = ev.clientX - caixa.left + 12;
         dica.style.left = Math.min(x, caixa.width - dica.offsetWidth - 4) + 'px';
         dica.style.top = (ev.clientY - caixa.top - 10) + 'px';
-      });
-      r.addEventListener('mouseleave', () => { dica.style.display = 'none'; });
+      };
+      r.addEventListener('pointermove', mostrar);
+      r.addEventListener('pointerdown', mostrar);
+      r.addEventListener('pointerleave', () => { dica.style.display = 'none'; });
     });
   }
 </script>

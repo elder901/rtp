@@ -22,8 +22,8 @@
   .card { background:var(--card); border:1px solid var(--borda); border-radius:8px; padding:20px; margin-bottom:20px; }
   h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:16px; margin:0 0 12px; } h3 { font-size:14px; margin:16px 0 8px; }
   .suave { color:var(--suave); }
-  .grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; }
-  .colunas { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:20px; }
+  .grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr)); gap:12px; }
+  .colunas { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(340px,100%),1fr)); gap:20px; }
   label { display:block; font-weight:600; font-size:13px; margin-bottom:4px; }
   label.check { display:flex; gap:8px; align-items:center; font-weight:500; }
   input, select { width:100%; padding:8px; border:1px solid var(--borda); border-radius:6px; font:inherit;
@@ -35,10 +35,11 @@
   button, .botao { background:var(--azul); color:#fff; border:0; border-radius:6px; padding:9px 16px; font:inherit;
                    font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; }
   button.secundario, .botao.secundario { background:transparent; color:var(--serie); border:1px solid var(--borda); }
-  button.mini { padding:3px 8px; font-size:12px; }
+  button.mini { padding:3px 8px; font-size:12px; white-space:nowrap; }
   button:disabled { opacity:.45; cursor:not-allowed; }
   .acoes { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
   .abas { display:flex; gap:4px; margin:12px 0 0; flex-wrap:wrap; }
+  .abas a { white-space:nowrap; }
   .abas a { padding:8px 14px; border-radius:6px 6px 0 0; text-decoration:none; color:var(--suave); font-weight:600; }
   .abas a.ativa { background:var(--card); color:var(--texto); border:1px solid var(--borda); border-bottom-color:var(--card); }
   .tabela { overflow-x:auto; }
@@ -54,14 +55,67 @@
   .barra { height:8px; border-radius:0 4px 4px 0; background:var(--serie); min-width:2px; }
   .barra.atual { background:var(--neutro); }
   tr.destaque td { background:var(--tag); }
-  .indicadores { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; }
+  .indicadores { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(170px,100%),1fr)); gap:12px; }
   .indicador { border:1px solid var(--borda); border-radius:8px; padding:12px; }
   .indicador .valor { font-size:20px; font-weight:700; font-variant-numeric:tabular-nums; }
   .indicador .rotulo { font-size:12px; color:var(--suave); }
   .grafico { position:relative; }
   .grafico svg { width:100%; height:auto; display:block; }
+  .barras { flex:1; min-width:120px; }
+  code { word-break:break-all; }
+  .so-celular { display:none; }
   .dica { position:absolute; pointer-events:none; background:var(--card); border:1px solid var(--borda); border-radius:6px;
           padding:6px 10px; font-size:12px; box-shadow:0 2px 8px rgba(0,0,0,.12); display:none; white-space:nowrap; }
+
+  /* ---- Celular e telas estreitas ---- */
+  @media (max-width: 760px) {
+    header { padding:12px 16px; }
+    main { padding:16px; }
+    .card { padding:14px; }
+    h1 { font-size:18px; } h2 { font-size:15px; }
+    /* abas numa linha só, roláveis */
+    .abas { flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; margin-left:-16px;
+            margin-right:-16px; padding:0 16px; }
+    .abas::-webkit-scrollbar { display:none; }
+    .abas a { padding:8px 12px; }
+    /* campos com 16px evitam o zoom automático do iOS; alvos de toque maiores */
+    input, select, textarea { font-size:16px; }
+    button, .botao { min-height:42px; }
+    button.mini { min-height:32px; }
+    .acoes > * { flex:1 1 auto; }
+    .acoes input[type=file] { width:100%; }
+    .indicadores { grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px; }
+    .indicador { padding:10px; }
+    .indicador .valor { font-size:17px; }
+    /* gráfico rola em vez de encolher até ficar ilegível */
+    .grafico { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    .grafico svg { min-width:560px; }
+    .so-celular { display:block; }
+    /* tabelas viram cartões: uma linha por cartão, "rótulo: valor" */
+    .tabela { overflow-x:visible; }
+    table.empilhada, table.empilhada tbody, table.empilhada tr, table.empilhada td { display:block; width:100%; }
+    table.empilhada tr.cabecalho { display:none; }
+    table.empilhada tr { border:1px solid var(--borda); border-radius:8px; padding:4px 12px; margin-bottom:10px;
+                         background:var(--card); }
+    table.empilhada tr[hidden] { display:none; }
+    table.empilhada tr.destaque { border-color:var(--serie); }
+    table.empilhada tr.destaque td { background:transparent; }
+    table.empilhada td { display:flex; justify-content:space-between; align-items:center; gap:12px; text-align:right;
+                         white-space:normal; padding:7px 0; border-bottom:1px dashed var(--borda); min-width:0;
+                         overflow-wrap:anywhere; }
+    table.empilhada td:last-child { border-bottom:0; }
+    table.empilhada td::before { content:attr(data-rotulo); flex:0 0 40%; text-align:left; font-size:12px;
+                                 font-weight:600; color:var(--suave); }
+    /* primeira coluna = título do cartão */
+    table.empilhada td:first-child { display:block; text-align:left; font-weight:600; font-size:15px;
+                                     border-bottom:1px solid var(--borda); }
+    table.empilhada td:first-child::before { display:none; }
+    table.empilhada td.vazio { display:block; text-align:left; border:0; }
+    table.empilhada td.vazio::before { display:none; }
+    table.empilhada td input, table.empilhada td select { width:auto; min-width:0; flex:1 1 auto;
+                                                          max-width:calc(60% - 12px); }
+    table.empilhada td .barras { max-width:55%; }
+  }
 </style>
 </head>
 <body>
@@ -82,5 +136,25 @@
 {% if avisos %}<div class="card">{% for t in avisos %}<div class="alerta">{{ t }}</div>{% endfor %}</div>{% endif %}
 {% block conteudo %}{% endblock %}
 </main>
+<script>
+  // Abas: no celular a faixa rola; mantém a aba ativa visível.
+  const abas = document.querySelector('.abas'), ativa = document.querySelector('.abas a.ativa');
+  if (abas && ativa && abas.scrollWidth > abas.clientWidth) abas.scrollLeft = ativa.offsetLeft - abas.offsetLeft - 24;
+  // Tabelas: guarda o título de cada coluna em data-rotulo para virarem cartões no celular (ver CSS acima).
+  document.querySelectorAll('.tabela table').forEach(tabela => {
+    const linhas = tabela.querySelectorAll('tr');
+    if (!linhas.length || !linhas[0].querySelector('th')) return;
+    const titulos = [...linhas[0].children].map(th => th.textContent.trim().replace(/\s+/g, ' '));
+    tabela.classList.add('empilhada');
+    linhas[0].classList.add('cabecalho');
+    linhas.forEach((tr, i) => {
+      if (i === 0) return;
+      [...tr.children].forEach((td, j) => {
+        if (td.hasAttribute('colspan')) td.classList.add('vazio');
+        else td.dataset.rotulo = titulos[j] || '';
+      });
+    });
+  });
+</script>
 </body>
 </html>

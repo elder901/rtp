@@ -68,8 +68,8 @@
       <td title="{{ c.tratamento_is }}">{{ (c.imposto_seletivo_ano / c.quantidade)|brl if c.quantidade and c.imposto_seletivo_ano else '—' }}</td>
       <td>{{ c.custo_unit_atual|brl }}</td><td><b>{{ c.custo_unit_precos_hoje|brl }}</b></td>
       <td class="txt" title="Hoje {{ c.custo_unit_atual|brl }} · {{ ano }} {{ c.custo_unit_precos_hoje|brl }}">
-        <div class="barra atual" style="width:{{ ((c.custo_unit_atual or 0) / maior * 100)|round(1) }}%"></div>
-        <div class="barra" style="width:{{ ((c.custo_unit_precos_hoje or 0) / maior * 100)|round(1) }}%; margin-top:2px"></div></td>
+        <div class="barras"><div class="barra atual" style="width:{{ ((c.custo_unit_atual or 0) / maior * 100)|round(1) }}%"></div>
+        <div class="barra" style="width:{{ ((c.custo_unit_precos_hoje or 0) / maior * 100)|round(1) }}%; margin-top:2px"></div></div></td>
       <td>{{ var(c.variacao_custo_precos_hoje_pct) }}</td>
       <td><b>{{ c.preco_nota_equilibrio_unit|brl }}</b></td><td>{{ var(c.variacao_preco_nota_equilibrio_pct, inverso=true) }}</td></tr>
     {% endfor %}
