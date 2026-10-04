@@ -44,6 +44,9 @@ class Premissas:
     # Corresponde à parcela de CBS/IBS recolhida dentro do DAS; varia por anexo e faixa — estimativa.
     credito_fornecedor_simples_pct: Decimal = D("4.0")
     credito_fornecedor_mei_pct: Decimal = D("0")
+    # Crédito presumido de CBS/IBS em compras de não contribuinte (ex.: produtor rural pessoa física), previsto na
+    # LC 214/2025 com percentuais a regulamentar. Padrão conservador: zero.
+    credito_presumido_nao_contribuinte_pct: Decimal = D("0")
     # Alíquota efetiva do DAS da empresa analisada (só para empresas do Simples).
     aliquota_das_pct: Decimal = D("6.0")
     # Repartição do DAS (% do DAS): parcelas que CBS e IBS substituem. Padrão: Anexo I (comércio), 1ª faixa.

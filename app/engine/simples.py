@@ -45,7 +45,8 @@ def comparar(a_simples: Analise, a_regular: Analise) -> list[dict]:
             elif r.contraparte.regime == "normal":
                 creditos += v.cbs + v.ibs
             else:
-                pct = p.credito_fornecedor_simples_pct if r.contraparte.regime == "simples" else p.credito_fornecedor_mei_pct
+                pct = {"simples": p.credito_fornecedor_simples_pct, "mei": p.credito_fornecedor_mei_pct,
+                       "nao_contribuinte": p.credito_presumido_nao_contribuinte_pct}[r.contraparte.regime]
                 creditos += (r.item.valor_liquido * pct / 100).quantize(Decimal("0.01"))
         das_reduzido = (das_total * (1 - parcela)).quantize(Decimal("0.01"))
         hibrido = das_reduzido + debitos - creditos

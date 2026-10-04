@@ -76,3 +76,19 @@ def test_agregacoes_e_excel(analise, tmp_path):
     assert any("sem cClassTrib" in t for t in analise.alertas)
     destino = exportar(analise, tmp_path / "r.xlsx")
     assert destino.stat().st_size > 0
+
+
+def test_nota_de_entrada_propria_de_produtor_rural(analise):
+    tomate = _item(analise, "TOM-KG")              # nota emitida pela própria loja, fornecedor é o destinatário
+    assert tomate.direcao == "entrada"
+    assert (tomate.contraparte.nome, tomate.contraparte.regime) == ("JOSE PRODUTOR RURAL", "nao_contribuinte")
+    assert tomate.atual.creditos == D("0")          # pessoa física: sem crédito de PIS/COFINS; ICMS isento
+    assert tomate.anos[2033].creditos == D("0")     # crédito presumido padrão = 0 (premissa)
+    assert any("não contribuinte" in t for t in analise.alertas)
+
+
+def test_credito_presumido_de_produtor_rural_como_premissa():
+    docs = ler_caminho(FX).documentos
+    p = Premissas(anos=[2033], credito_presumido_nao_contribuinte_pct=D("5"))
+    a = analisar(Empresa("11222333000181", "LOJA", "real", "SP", 3550308), docs, p, CalculadoraFake())
+    assert _item(a, "TOM-KG").anos[2033].creditos == D("15.00")

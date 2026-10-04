@@ -31,7 +31,7 @@ def test_nfe_fornecedor_simples():
 
 def test_saida_e_pasta_com_xml_invalido():
     res = ler_caminho(FX)
-    assert len(res.documentos) == 3
+    assert len(res.documentos) == 4
     assert len(res.rejeitados) == 1
     saida = next(d for d in res.documentos if d.numero == "10")
     assert saida.direcao_para(EMPRESA) == "saida"

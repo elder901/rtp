@@ -166,6 +166,7 @@ def salvar_dados(empresa_id: int, regime: str = Form(...), uf: str = Form(...), 
                  industria: bool = Form(False), manifestar_ciencia: bool = Form(False), ambiente_dfe: int = Form(1),
                  cbs_referencia: str = Form(""), ibs_uf_referencia: str = Form(""), ibs_mun_referencia: str = Form(""),
                  credito_fornecedor_simples_pct: str = Form(""), credito_fornecedor_mei_pct: str = Form(""),
+                 credito_presumido_nao_contribuinte_pct: str = Form(""),
                  aliquota_das_pct: str = Form(""), das_pis_cofins_pct: str = Form(""),
                  das_icms_iss_pct: str = Form("")):
     if regime not in ("real", "presumido", "simples") or ambiente_dfe not in (1, 2):
@@ -178,7 +179,9 @@ def salvar_dados(empresa_id: int, regime: str = Form(...), uf: str = Form(...), 
             servicos.atualizar_premissas(e, dict(
                 cbs_referencia=cbs_referencia, ibs_uf_referencia=ibs_uf_referencia,
                 ibs_mun_referencia=ibs_mun_referencia, credito_fornecedor_simples_pct=credito_fornecedor_simples_pct,
-                credito_fornecedor_mei_pct=credito_fornecedor_mei_pct, aliquota_das_pct=aliquota_das_pct,
+                credito_fornecedor_mei_pct=credito_fornecedor_mei_pct,
+                credito_presumido_nao_contribuinte_pct=credito_presumido_nao_contribuinte_pct,
+                aliquota_das_pct=aliquota_das_pct,
                 das_pis_cofins_pct=das_pis_cofins_pct, das_icms_iss_pct=das_icms_iss_pct))
         except InvalidOperation:
             raise HTTPException(422, "Premissa com valor inválido")

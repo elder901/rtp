@@ -99,7 +99,8 @@ def _creditos_atuais(i: Item, empresa: Empresa, fornecedor: Participante, p: Pre
     if empresa.regime == "presumido":
         return icms + ipi
     # Lucro real: PIS/COFINS não cumulativo sobre o custo de aquisição, sem o ICMS (Lei 14.592/2023).
-    if i.pis_cst in CST_PIS_SEM_CREDITO:
+    # Sem crédito em compra de pessoa física (art. 3º, § 3º) ou não sujeita à contribuição (CST 04 a 09).
+    if i.pis_cst in CST_PIS_SEM_CREDITO or len(fornecedor.cnpj) != 14:
         return icms + ipi
     base_pc = i.valor_operacao + (ZERO if p.industria else i.v_ipi) - i.v_icms
     return icms + ipi + (base_pc * PIS_COFINS_NAO_CUMULATIVO).quantize(Decimal("0.01"))
@@ -127,7 +128,7 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
         if direcao is None:
             alertas.append(f"NF {doc.numero} ({doc.arquivo}): CNPJ {empresa.cnpj} não é emitente nem destinatário — ignorada.")
             continue
-        contraparte = doc.emitente if direcao == "entrada" else (doc.destinatario or Participante("", "Consumidor final", "", ""))
+        contraparte = doc.contraparte_para(empresa.cnpj)
         for item in doc.itens:
             if item.cfop[-3:] not in CFOP_ONEROSOS:
                 ignorados += 1
@@ -161,15 +162,18 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
                 r.anos[ano] = ValoresCenario(r.atual.tributos)
                 continue
             if direcao == "entrada" and not fornecedor_regular:
-                # Fornecedor do Simples/MEI continua recolhendo pelo DAS: o preço não muda,
-                # mas o crédito do adquirente passa a ser só a parcela de CBS/IBS do DAS.
+                # Fornecedor do Simples/MEI continua recolhendo pelo DAS e o não contribuinte (produtor rural
+                # pessoa física) não recolhe CBS/IBS: o preço não muda, mas o crédito do adquirente passa a ser só
+                # a parcela de CBS/IBS do DAS ou o crédito presumido (premissas).
                 tributos = item.tributos_por_dentro + (item.v_icms_st + item.v_fcp_st) * t.fator_icms_iss
                 cred = ZERO
                 if empresa.regime != "simples":
-                    pct = premissas.credito_fornecedor_simples_pct if contraparte.regime == "simples" \
-                        else premissas.credito_fornecedor_mei_pct
-                    cred = (item.valor_liquido * pct / 100).quantize(Decimal("0.01")) \
-                        + item.v_cred_icms_sn * t.fator_icms_iss
+                    pct = {"simples": premissas.credito_fornecedor_simples_pct,
+                           "mei": premissas.credito_fornecedor_mei_pct,
+                           "nao_contribuinte": premissas.credito_presumido_nao_contribuinte_pct}[contraparte.regime]
+                    icms_residual = (item.v_cred_icms_sn if contraparte.regime in ("simples", "mei")
+                                     else item.v_icms + item.v_fcp) * t.fator_icms_iss
+                    cred = (item.valor_liquido * pct / 100).quantize(Decimal("0.01")) + icms_residual
                 r.anos[ano] = ValoresCenario(tributos, cred)
                 continue
 
@@ -197,6 +201,11 @@ def _alertas_gerais(resultados: list[ResultadoItem], empresa: Empresa, alertas: 
     if mono:
         alertas.append(f"Itens com monofasia (combustíveis, NCM {', '.join(sorted(mono))}): cálculo ad rem não "
                        f"suportado nesta versão.")
+    rurais = {r.contraparte.cnpj for r in resultados
+              if r.direcao == "entrada" and r.contraparte.regime == "nao_contribuinte"}
+    if rurais:
+        alertas.append(f"Compras de {len(rurais)} fornecedor(es) não contribuinte(s) (ex.: produtor rural pessoa "
+                       f"física): na reforma o crédito vem do crédito presumido informado nas premissas.")
     if ignorados:
         alertas.append(f"{ignorados} item(ns) com CFOP não oneroso (devolução, remessa, bonificação etc.) foram "
                        f"desconsiderados.")

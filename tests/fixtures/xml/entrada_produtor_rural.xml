@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00"><NFe><infNFe Id="NFe35261011222333000181550010000000201000000202" versao="4.00">
+<ide><cUF>35</cUF><mod>55</mod><serie>1</serie><nNF>20</nNF><dhEmi>2026-03-18T07:00:00-03:00</dhEmi><tpNF>0</tpNF></ide>
+<emit><CNPJ>11222333000181</CNPJ><xNome>LOJA TESTE LTDA</xNome><enderEmit><cMun>3550308</cMun><UF>SP</UF></enderEmit><CRT>3</CRT></emit>
+<dest><CPF>12345678909</CPF><xNome>JOSE PRODUTOR RURAL</xNome><enderDest><cMun>3509502</cMun><UF>SP</UF></enderDest><indIEDest>1</indIEDest></dest>
+<det nItem="1"><prod><cProd>TOM-KG</cProd><cEAN>SEM GTIN</cEAN><xProd>TOMATE KG</xProd><NCM>07020000</NCM><CFOP>1102</CFOP><uCom>KG</uCom><qCom>200.0000</qCom><vProd>300.00</vProd></prod>
+<imposto><ICMS><ICMS40><orig>0</orig><CST>40</CST></ICMS40></ICMS>
+<PIS><PISOutr><CST>73</CST><vBC>0.00</vBC><pPIS>0.00</pPIS><vPIS>0.00</vPIS></PISOutr></PIS>
+<COFINS><COFINSOutr><CST>73</CST><vBC>0.00</vBC><pCOFINS>0.00</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSOutr></COFINS></imposto></det>
+</infNFe></NFe></nfeProc>

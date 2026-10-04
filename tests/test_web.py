@@ -26,9 +26,9 @@ def test_fluxo_completo(banco, monkeypatch):
     url = r.headers["location"]
 
     r = c.post(url + "/xmls", files=_xmls())
-    assert "Importação: 3 novas" in r.text and "1 rejeitadas" in r.text
+    assert "Importação: 4 novas" in r.text and "1 rejeitadas" in r.text
     r = c.post(url + "/xmls", files=_xmls())
-    assert "3 já existiam" in r.text
+    assert "4 já existiam" in r.text
 
     r = c.post(url + "/certificado", files={"pfx": ("c.pfx", gerar_pfx(), "application/x-pkcs12")},
                data={"senha": "segredo"})
@@ -71,8 +71,8 @@ def test_filtro_de_periodo(banco):
     with db.sessao() as s:
         e = servicos.criar_empresa(s, CNPJ_EMPRESA, "LOJA", "real", "SP", 3550308)
         servicos.importar_arquivos(s, e, [(p.name, p.read_bytes()) for p in (FX / "xml").glob("*.xml")])
-        assert len(servicos.documentos(s, e)) == 3
-        assert len(servicos.documentos(s, e, date(2026, 3, 11), date(2026, 3, 31))) == 2
+        assert len(servicos.documentos(s, e)) == 4
+        assert len(servicos.documentos(s, e, date(2026, 3, 11), date(2026, 3, 31))) == 3
         assert len(servicos.documentos(s, e, fim=date(2026, 3, 10))) == 1
 
 

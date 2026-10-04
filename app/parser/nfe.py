@@ -29,6 +29,7 @@ class Participante:
     uf: str
     cod_municipio: str
     crt: str = ""
+    ind_ie: str = ""  # indIEDest: 9 = não contribuinte
 
     @property
     def regime(self) -> str:
@@ -36,6 +37,8 @@ class Participante:
             return "simples"
         if self.crt in CRT_MEI:
             return "mei"
+        if not self.crt and (len(self.cnpj) == 11 or self.ind_ie == "9"):
+            return "nao_contribuinte"  # pessoa física (ex.: produtor rural) ou PJ não contribuinte
         return "normal"
 
 
@@ -113,6 +116,13 @@ class Documento:
     itens: list[Item] = field(default_factory=list)
     arquivo: str = ""
 
+    def contraparte_para(self, cnpj_empresa: str) -> Participante:
+        """Quem está do outro lado da operação. Na nota de entrada emitida pela própria empresa (compra de produtor
+        rural, importação...) o fornecedor é o destinatário."""
+        if self.emitente.cnpj == _so_digitos(cnpj_empresa):
+            return self.destinatario or Participante("", "Consumidor final", "", "")
+        return self.emitente
+
     def direcao_para(self, cnpj_empresa: str) -> str | None:
         """'saida' se a empresa emitiu, 'entrada' se a empresa recebeu; None se não participa."""
         cnpj_empresa = _so_digitos(cnpj_empresa)
@@ -156,6 +166,7 @@ def _participante(el, com_crt: bool) -> Participante | None:
         uf=_t(ender, "UF"),
         cod_municipio=_t(ender, "cMun"),
         crt=_t(el, "CRT") if com_crt else "",
+        ind_ie=_t(el, "indIEDest"),
     )
 
 
