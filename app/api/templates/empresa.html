@@ -59,7 +59,8 @@
   <h2>Dados e premissas</h2>
   <form method="post" action="/empresas/{{ e.id }}/dados">
     <div class="grade">
-      <div><label>Regime atual</label><select name="regime">
+      <div><label>Regime atual</label><select name="regime" id="regime"
+          onchange="document.getElementById('premissas-simples').hidden = this.value !== 'simples'">
         {% for v, t in [('real','Lucro Real'),('presumido','Lucro Presumido'),('simples','Simples Nacional')] %}
         <option value="{{ v }}" {{ 'selected' if e.regime == v }}>{{ t }}</option>{% endfor %}</select></div>
       <div><label>UF</label><input name="uf" value="{{ e.uf }}" maxlength="2" required></div>
@@ -75,16 +76,32 @@
         <span class="suave">A ciência é um evento oficial registrado na SEFAZ em nome da empresa.</span></div>
     </div>
     <h3>Premissas da simulação</h3>
+    <p class="suave" style="margin-top:-4px">O cálculo de CBS/IBS de cada item é da Calculadora RTC. Premissas são só os
+      dados que ela precisa receber e que ainda não foram definidos em lei ou não estão nos XMLs.</p>
+    <h3 style="font-size:13px">Alíquotas de referência (2027 em diante)</h3>
+    <p class="suave" style="margin-top:-4px">Usadas apenas enquanto a alíquota oficial não estiver publicada na base da
+      calculadora — quando estiver, a oficial é usada automaticamente (a origem aparece na Análise).</p>
     <div class="grade">
       <div><label>CBS referência (%)</label><input name="cbs_referencia" value="{{ premissas.cbs_referencia }}"></div>
       <div><label>IBS UF referência (%)</label><input name="ibs_uf_referencia" value="{{ premissas.ibs_uf_referencia }}"></div>
       <div><label>IBS município referência (%)</label><input name="ibs_mun_referencia" value="{{ premissas.ibs_mun_referencia }}"></div>
-      <div><label>Crédito de fornecedor do Simples (%)</label><input name="credito_fornecedor_simples_pct" value="{{ premissas.credito_fornecedor_simples_pct }}"></div>
-      <div><label>Crédito de fornecedor MEI (%)</label><input name="credito_fornecedor_mei_pct" value="{{ premissas.credito_fornecedor_mei_pct }}"></div>
-      <div><label>Crédito presumido — produtor rural / não contribuinte (%)</label><input name="credito_presumido_nao_contribuinte_pct" value="{{ premissas.credito_presumido_nao_contribuinte_pct }}"></div>
-      <div><label>DAS efetivo (só Simples, %)</label><input name="aliquota_das_pct" value="{{ premissas.aliquota_das_pct }}"></div>
-      <div><label>PIS+COFINS dentro do DAS (% do DAS)</label><input name="das_pis_cofins_pct" value="{{ premissas.das_pis_cofins_pct }}"></div>
-      <div><label>ICMS/ISS dentro do DAS (% do DAS)</label><input name="das_icms_iss_pct" value="{{ premissas.das_icms_iss_pct }}"></div>
+    </div>
+    <h3 style="font-size:13px">Créditos que não vêm no XML</h3>
+    <div class="grade">
+      <div><label>Crédito de fornecedor do Simples (% do valor)</label><input name="credito_fornecedor_simples_pct" value="{{ premissas.credito_fornecedor_simples_pct }}">
+        <span class="suave">parcela de CBS/IBS dentro do DAS do fornecedor</span></div>
+      <div><label>Crédito de fornecedor MEI (% do valor)</label><input name="credito_fornecedor_mei_pct" value="{{ premissas.credito_fornecedor_mei_pct }}"></div>
+      <div><label>Crédito presumido — produtor rural / não contribuinte (%)</label><input name="credito_presumido_nao_contribuinte_pct" value="{{ premissas.credito_presumido_nao_contribuinte_pct }}">
+        <span class="suave">previsto na LC 214, percentuais a regulamentar</span></div>
+    </div>
+    <div id="premissas-simples" {{ 'hidden' if e.regime != 'simples' }}>
+      <h3 style="font-size:13px">Empresa do Simples Nacional</h3>
+      <p class="suave" style="margin-top:-4px">Dependem do anexo e da faixa de faturamento; não aparecem em nota fiscal.</p>
+      <div class="grade">
+        <div><label>DAS efetivo (%)</label><input name="aliquota_das_pct" value="{{ premissas.aliquota_das_pct }}"></div>
+        <div><label>PIS+COFINS dentro do DAS (% do DAS)</label><input name="das_pis_cofins_pct" value="{{ premissas.das_pis_cofins_pct }}"></div>
+        <div><label>ICMS/ISS dentro do DAS (% do DAS)</label><input name="das_icms_iss_pct" value="{{ premissas.das_icms_iss_pct }}"></div>
+      </div>
     </div>
     <div class="acoes"><button type="submit">Salvar</button></div>
   </form>

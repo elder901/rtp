@@ -42,16 +42,16 @@ def test_fluxo_completo(banco, monkeypatch):
         e = s.scalar(select(models.Empresa))
         produtos = classificacao.produtos(servicos.documentos(s, e), e.cnpj, {})
     for p in produtos:
-        cst, cct = ("200", "200003") if p.codigo in ("V-ARZ5", "V-NB01") else ("", "")
-        form += [("codigo", p.codigo), ("ncm", p.ncm), ("escopo", "codigo"), ("cst", cst), ("cclasstrib", cct),
-                 ("chave_atual", "")]
+        cst, cct = ("200", "200003") if p.gtin in ("7890000000024", "7890000000017") else ("", "")
+        form += [("gtin", p.gtin), ("codigo", p.codigo), ("ncm", p.ncm), ("escopo", p.escopo_ajuste), ("cst", cst),
+                 ("cclasstrib", cct), ("chave_atual", "")]
     r = c.post(url + "/classificacao", content=urlencode(form),
                headers={"Content-Type": "application/x-www-form-urlencoded"})
     assert "2 classificação(ões) gravada(s)" in r.text
     assert "não se aplica ao NCM 84713012" in r.text           # cesta básica num notebook: alerta
 
     csv = c.get(url + "/classificacao.csv").text
-    assert "V-ARZ5;200;200003" in csv
+    assert "ean:7890000000024;200;200003" in csv
 
     painel = c.get(url + "/analise?anos=2027,2033")
     assert painel.status_code == 200

@@ -92,3 +92,9 @@ def test_credito_presumido_de_produtor_rural_como_premissa():
     p = Premissas(anos=[2033], credito_presumido_nao_contribuinte_pct=D("5"))
     a = analisar(Empresa("11222333000181", "LOJA", "real", "SP", 3550308), docs, p, CalculadoraFake())
     assert _item(a, "TOM-KG").anos[2033].creditos == D("15.00")
+
+
+def test_versao_da_calculadora_registrada(analise):
+    assert analise.versao_calculadora.startswith("app 1.0-teste · base de regras V0000")
+    premissas = {l["premissa"]: l["valor"] for l in agregacao.premissas(analise)}
+    assert "V0000" in premissas["Calculadora RTC usada"]

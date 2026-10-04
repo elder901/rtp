@@ -1,6 +1,18 @@
 {% extends "base.html" %}
 {% block conteudo %}
 <div class="card">
+  <h2>Calculadora RTC em uso</h2>
+  {% if calc.erro %}
+    <div class="alerta">Calculadora indisponível em {{ calc.url }}: {{ calc.erro }}</div>
+  {% else %}
+    <p style="margin:0">{{ 'Local (offline)' if calc_local else 'Pública da Receita' }} · app {{ calc.versao_app }} ·
+      base de regras {{ calc.versao_base }} de {{ calc.data_base }} <span class="suave">· {{ calc.url }}</span></p>
+  {% endif %}
+  {% if not calc_local %}<p class="suave">Para não enviar consultas à instância pública, instale a calculadora local:
+    <code>python -m app.cli calculadora atualizar</code> e defina <code>RTP_CALCULADORA_URL=http://localhost:8080/api</code>.</p>{% endif %}
+</div>
+
+<div class="card">
   <h1>Empresas</h1>
   {% if empresas %}
   <div class="tabela"><table>

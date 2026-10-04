@@ -2,11 +2,13 @@
 {% block conteudo %}
 <div class="card" style="border-top-left-radius:0">
   <h2>Classificação tributária (CBS/IBS) por produto</h2>
-  <p class="suave">Ordem usada no cálculo: <b>ajuste manual</b> (por código do produto ou por NCM) → <b>grupo IBSCBS
-    do XML</b> → <b>padrão 000/000001</b> (tributação integral). Preencha CST e cClassTrib só onde quiser ajustar;
-    deixe em branco para remover o ajuste. Cada ajuste é conferido na Calculadora RTC ao salvar.</p>
+  <p class="suave">Cada linha é um produto, identificado pelo <b>EAN</b> e reunindo compras e vendas; sem EAN válido
+    (SEM GTIN, código de balança com prefixo 2), pelo código. Ordem usada no cálculo: <b>ajuste manual</b>
+    (EAN → código → NCM) → <b>grupo IBSCBS do XML</b> → <b>padrão 000/000001</b> (tributação integral).
+    Preencha CST e cClassTrib só onde quiser ajustar; em branco remove o ajuste. Cada ajuste é conferido na
+    Calculadora RTC ao salvar.</p>
   <div class="acoes">
-    <input id="filtro" placeholder="Filtrar por código, descrição ou NCM" style="max-width:320px">
+    <input id="filtro" placeholder="Filtrar por EAN, código, descrição ou NCM" style="max-width:320px">
     <label class="check"><input type="checkbox" id="so-padrao"> Só os que estão no padrão</label>
     <a class="botao secundario" href="/empresas/{{ e.id }}/classificacao.csv">Exportar CSV</a>
     <form method="post" action="/empresas/{{ e.id }}/classificacao/csv" enctype="multipart/form-data" class="acoes" style="margin:0">
@@ -14,33 +16,45 @@
       <button type="submit" class="secundario">Importar CSV</button>
     </form>
   </div>
+  {% if sugestoes_ean %}
+  <form method="post" action="/empresas/{{ e.id }}/classificacao/sugestoes-ean" class="acoes">
+    <button type="submit">Aplicar {{ sugestoes_ean }} sugestão(ões) vindas do fornecedor com o mesmo EAN</button>
+    <span class="suave">Usa o cClassTrib que o fornecedor informou no XML para o mesmo EAN e valida cada um.</span>
+  </form>
+  {% endif %}
 </div>
 
 {% if not situacoes %}<div class="alerta">Calculadora indisponível: a lista de códigos e a validação não puderam ser carregadas.</div>{% endif %}
 
 <form method="post" action="/empresas/{{ e.id }}/classificacao" class="card">
   <div class="tabela"><table id="tabela">
-    <tr><th class="txt">Produto</th><th class="txt">NCM</th><th class="txt">Dir.</th><th>Valor</th>
-        <th class="txt">Em uso</th><th class="txt">Sugestão</th><th class="txt">Ajustar por</th><th class="txt">CST</th>
-        <th class="txt">cClassTrib</th><th class="txt">Validação</th></tr>
+    <tr><th class="txt">Produto</th><th class="txt">EAN</th><th class="txt">NCM</th><th class="txt">Operações</th>
+        <th>Vendas</th><th>Compras</th><th class="txt">Em uso</th><th class="txt">Sugestão</th>
+        <th class="txt">Ajustar por</th><th class="txt">CST</th><th class="txt">cClassTrib</th><th class="txt">Validação</th></tr>
     {% for p in produtos %}
-    {% set ajuste = ajustes.get(p.chave_manual) if p.chave_manual else none %}
-    <tr data-origem="{{ p.origem }}" data-busca="{{ (p.codigo ~ ' ' ~ p.descricao ~ ' ' ~ p.ncm)|lower }}">
-      <td class="txt quebra">{{ p.codigo }} · {{ p.descricao }}
-        <input type="hidden" name="codigo" value="{{ p.codigo }}"><input type="hidden" name="ncm" value="{{ p.ncm }}">
-        <input type="hidden" name="chave_atual" value="{{ p.chave_manual }}"></td>
-      <td class="txt">{{ p.ncm }}</td><td class="txt">{{ p.direcao }}</td><td>{{ p.valor|brl }}</td>
+    {% set validacao = validacoes.get(p.chave) %}
+    {% set escopo = p.escopo_ajuste %}
+    <tr data-origem="{{ p.origem }}" data-busca="{{ (p.gtin ~ ' ' ~ p.codigos|join(' ') ~ ' ' ~ p.descricao ~ ' ' ~ p.ncms|join(' '))|lower }}">
+      <td class="txt quebra">{{ p.descricao }}<br><span class="suave">{{ p.codigos|join(', ') }}</span>
+        <input type="hidden" name="gtin" value="{{ p.gtin }}"><input type="hidden" name="codigo" value="{{ p.codigo }}">
+        <input type="hidden" name="ncm" value="{{ p.ncm }}"><input type="hidden" name="chave_atual" value="{{ p.chave_manual }}"></td>
+      <td class="txt" style="font-family:monospace">{{ p.gtin or '—' }}</td>
+      <td class="txt">{{ p.ncms|join(', ') }}{% if p.ncm_divergente %}<br><span class="sobe" title="Fornecedor e loja usam NCMs diferentes para o mesmo EAN">NCM divergente</span>{% endif %}</td>
+      <td class="txt">{{ p.lados }}</td>
+      <td>{{ p.valor_venda|brl if p.valor_venda else '—' }}</td><td>{{ p.valor_compra|brl if p.valor_compra else '—' }}</td>
       <td class="txt">{{ p.cst }}/{{ p.cclasstrib }} <span class="tag {{ p.origem }}">{{ p.origem }}</span></td>
-      <td class="txt">{% if p.sugestao %}<span title="{{ p.sugestao_fonte }}">{{ p.sugestao[0] }}/{{ p.sugestao[1] }}</span>
+      <td class="txt">{% if p.sugestao %}<span title="{{ p.sugestao_fonte }}">{{ p.sugestao[0] }}/{{ p.sugestao[1] }}
+          <span class="tag">{{ 'mesmo EAN' if p.sugestao_por_ean else 'mesmo NCM' }}</span></span>
         <button type="button" class="mini secundario usar" data-cst="{{ p.sugestao[0] }}" data-cct="{{ p.sugestao[1] }}">usar</button>{% else %}—{% endif %}</td>
       <td><select name="escopo">
-        <option value="codigo" {{ 'selected' if p.chave_manual != p.ncm or not p.chave_manual }}>código</option>
-        <option value="ncm" {{ 'selected' if p.chave_manual and p.chave_manual == p.ncm }}>NCM</option></select></td>
-      <td><input name="cst" value="{{ p.cst if p.origem == 'manual' }}" list="lista-cst" size="4" maxlength="3"></td>
-      <td><input name="cclasstrib" value="{{ p.cclasstrib if p.origem == 'manual' }}" list="lista-cct" size="7" maxlength="6"></td>
-      <td class="txt quebra">{% if ajuste %}{% if ajuste.validacao %}<span class="sobe">{{ ajuste.validacao }}</span>{% else %}<span class="desce">ok</span>{% endif %}{% endif %}</td>
+        {% if p.gtin %}<option value="ean" {{ 'selected' if escopo == 'ean' }}>EAN</option>{% endif %}
+        <option value="codigo" {{ 'selected' if escopo == 'codigo' }}>código</option>
+        <option value="ncm" {{ 'selected' if escopo == 'ncm' }}>NCM</option></select></td>
+      <td><input name="cst" value="{{ p.cst if p.origem == 'manual' }}" list="lista-cst" maxlength="3"></td>
+      <td><input name="cclasstrib" value="{{ p.cclasstrib if p.origem == 'manual' }}" list="lista-cct" maxlength="6"></td>
+      <td class="txt quebra">{% if p.origem == 'manual' and validacao is not none %}{% if validacao %}<span class="sobe">{{ validacao }}</span>{% else %}<span class="desce">ok</span>{% endif %}{% endif %}</td>
     </tr>
-    {% else %}<tr><td colspan="10" class="txt suave">Nenhum produto: importe notas primeiro.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="12" class="txt suave">Nenhum produto: importe notas primeiro.</td></tr>{% endfor %}
   </table></div>
   {% if produtos %}<div class="acoes"><button type="submit">Salvar e validar</button></div>{% endif %}
 </form>

@@ -22,7 +22,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from app import classificacao as classif
 from app import db, models, servicos
@@ -35,8 +35,8 @@ from app.config import settings
 from app.dfe.certificado import CertificadoInvalido
 from app.dfe.sincronizar import sincronizar, sincronizar_pendentes
 from app.ingest.arquivos import ler_classificacoes
-from app.relatorios import agregacao
-from app.relatorios.excel import exportar
+from app.relatorios import agregacao, negociacao
+from app.relatorios.excel import exportar, exportar_negociacao
 
 log = logging.getLogger(__name__)
 calculadora = CalculadoraRTC()
@@ -62,9 +62,22 @@ async def _agendador():
         await asyncio.sleep(settings.dfe_intervalo_minutos * 60)
 
 
+def _garantir_calculadora_local():
+    """Se o sistema aponta para a calculadora local instalada e ela está parada, inicia."""
+    from app.calculadora import offline
+
+    if settings.calculadora_url.rstrip("/") != offline.url_local() or not offline.estado().get("versao_dir"):
+        return
+    try:
+        offline.iniciar_atual()
+    except offline.ErroOffline:
+        log.exception("Não foi possível iniciar a calculadora local")
+
+
 @asynccontextmanager
 async def ciclo_de_vida(_app: FastAPI):
     db.criar_tabelas()
+    await asyncio.to_thread(_garantir_calculadora_local)
     tarefa = asyncio.create_task(_agendador()) if settings.dfe_agendador else None
     yield
     if tarefa:
@@ -131,7 +144,8 @@ def inicio(request: Request):
                                   .group_by(models.DocumentoFiscal.empresa_id)).all())
         empresas = list(s.scalars(select(models.Empresa).order_by(models.Empresa.nome)))
         linhas = [{"e": e, "notas": contagem.get(e.id, 0), "cert": e.certificado} for e in empresas]
-        return _render(request, "inicio.html", empresas=linhas)
+    return _render(request, "inicio.html", empresas=linhas, calc=calculadora.identificacao(),
+                   calc_local=settings.calculadora_url.startswith("http://localhost"))
 
 
 @app.post("/empresas")
@@ -228,34 +242,49 @@ def importar_xmls(empresa_id: int, xmls: list[UploadFile] = File(...)):
 
 # --- Classificação -----------------------------------------------------------------------------------------------
 
+def _chave_do_ajuste(escopo: str, gtin: str, codigo: str, ncm: str) -> str:
+    if escopo == "ncm":
+        return f"ncm:{ncm}"
+    if escopo == "ean" and gtin:
+        return f"ean:{gtin}"
+    return f"cod:{codigo}"
+
+
 @app.get("/empresas/{empresa_id}/classificacao", response_class=HTMLResponse)
 def tela_classificacao(request: Request, empresa_id: int):
     with db.sessao() as s:
         e = _carregar(s, empresa_id)
-        ajustes = {c.chave: c for c in s.scalars(select(models.ClassificacaoProduto)
-                                                 .where(models.ClassificacaoProduto.empresa_id == e.id))}
+        registros = {c.chave: c for c in s.scalars(select(models.ClassificacaoProduto)
+                                                   .where(models.ClassificacaoProduto.empresa_id == e.id))}
         produtos = classif.produtos(servicos.documentos(s, e), e.cnpj,
-                                    {k: (v.cst, v.cclasstrib) for k, v in ajustes.items()})
+                                    {k: (v.cst, v.cclasstrib) for k, v in registros.items()})
+    validacoes = {}
+    for p in produtos:
+        reg = None
+        if p.chave_manual:
+            reg = next((registros[k] for k in servicos.formas_da_chave(p.chave_manual) if k in registros), None)
+        validacoes[p.chave] = reg.validacao if reg else None
     try:
         situacoes = calculadora.situacoes_tributarias()
     except ErroCalculadora:
         situacoes = {}
-    return _render(request, "classificacao.html", e=e, produtos=produtos, ajustes=ajustes, situacoes=situacoes,
+    return _render(request, "classificacao.html", e=e, produtos=produtos, validacoes=validacoes,
+                   situacoes=situacoes, sugestoes_ean=sum(1 for p in produtos if p.sugestao_por_ean),
                    avisos=AVISOS.pop(e.id, []), aba="classificacao")
 
 
 @app.post("/empresas/{empresa_id}/classificacao")
 async def salvar_classificacoes(request: Request, empresa_id: int):
     form = await request.form()
-    linhas = zip(form.getlist("codigo"), form.getlist("ncm"), form.getlist("escopo"), form.getlist("cst"),
-                 form.getlist("cclasstrib"), form.getlist("chave_atual"))
+    linhas = list(zip(form.getlist("gtin"), form.getlist("codigo"), form.getlist("ncm"), form.getlist("escopo"),
+                      form.getlist("cst"), form.getlist("cclasstrib"), form.getlist("chave_atual")))
 
     def executar():
         salvos, problemas = 0, []
         with db.sessao() as s:
             e = _carregar(s, empresa_id)
-            for codigo, ncm, escopo, cst, cct, chave_atual in linhas:
-                chave = ncm if escopo == "ncm" else codigo
+            for gtin, codigo, ncm, escopo, cst, cct, chave_atual in linhas:
+                chave = _chave_do_ajuste(escopo, gtin, codigo, ncm)
                 if chave_atual and chave_atual != chave:
                     servicos.salvar_classificacao(s, e, chave_atual, "", "")
                 if not cst.strip() and not cct.strip():
@@ -279,19 +308,42 @@ async def salvar_classificacoes(request: Request, empresa_id: int):
     return _ir(empresa_id, "/classificacao")
 
 
+@app.post("/empresas/{empresa_id}/classificacao/sugestoes-ean")
+async def aplicar_sugestoes_ean(empresa_id: int):
+    """Aceita, de uma vez, as sugestões vindas do cClassTrib que o fornecedor informou para o mesmo EAN."""
+    def executar():
+        aplicadas, problemas = 0, []
+        with db.sessao() as s:
+            e = _carregar(s, empresa_id)
+            for p in classif.produtos(servicos.documentos(s, e), e.cnpj, servicos.classificacoes(s, e)):
+                if p.sugestao_por_ean and p.origem != "manual":
+                    cst, cct = p.sugestao
+                    motivo = classif.validar(calculadora, p.ncm, cst, cct)
+                    servicos.salvar_classificacao(s, e, p.chave, cst, cct, motivo)
+                    aplicadas += 1
+                    if motivo:
+                        problemas.append(f"EAN {p.gtin}: {motivo}")
+        return aplicadas, problemas
+
+    aplicadas, problemas = await run_in_threadpool(executar)
+    _avisar(empresa_id, f"{aplicadas} sugestão(ões) por EAN aplicada(s) e validada(s).", *problemas)
+    return _ir(empresa_id, "/classificacao")
+
+
 @app.get("/empresas/{empresa_id}/classificacao.csv")
 def exportar_classificacao(empresa_id: int):
     with db.sessao() as s:
         e = _carregar(s, empresa_id)
-        ajustes = servicos.classificacoes(s, e)
-        produtos = classif.produtos(servicos.documentos(s, e), e.cnpj, ajustes)
+        produtos = classif.produtos(servicos.documentos(s, e), e.cnpj, servicos.classificacoes(s, e))
     saida = io.StringIO()
     w = csv.writer(saida, delimiter=";")
-    w.writerow(["codigo_ou_ncm", "cst", "cclasstrib", "descricao", "ncm", "direcao", "origem_atual", "sugestao"])
+    w.writerow(["chave", "cst", "cclasstrib", "descricao", "ean", "codigos", "ncm", "operacoes", "origem_atual",
+                "em_uso", "sugestao"])
     for p in produtos:
         manual = p.origem == "manual"
-        w.writerow([p.chave_manual or p.codigo, p.cst if manual else "", p.cclasstrib if manual else "", p.descricao,
-                    p.ncm, p.direcao, p.origem, "/".join(p.sugestao) if p.sugestao else ""])
+        w.writerow([p.chave_manual or p.chave, p.cst if manual else "", p.cclasstrib if manual else "", p.descricao,
+                    p.gtin, "|".join(p.codigos), "|".join(p.ncms), p.lados, p.origem, f"{p.cst}/{p.cclasstrib}",
+                    "/".join(p.sugestao) if p.sugestao else ""])
     return Response(saida.getvalue().encode("utf-8-sig"), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="classificacao_{e.cnpj}.csv"'})
 
@@ -323,10 +375,107 @@ def _comparar_simples(empresa_id: int, e: models.Empresa, a, inicio: date | None
         return servicos.comparar_simples(s, s.get(models.Empresa, empresa_id), calculadora, a, inicio, fim)
 
 
+_CACHE_ANALISES: dict[tuple, tuple] = {}
+
+
+def _assinatura_dos_dados(s, e: models.Empresa) -> tuple:
+    """Muda sempre que notas, classificações ou premissas mudam — invalida o cache da análise."""
+    docs = s.execute(select(func.count(), func.max(models.DocumentoFiscal.id),
+                            func.sum(case((models.DocumentoFiscal.situacao == "completo", 1), else_=0)))
+                     .where(models.DocumentoFiscal.empresa_id == e.id)).one()
+    classes = s.execute(select(func.count(), func.max(models.ClassificacaoProduto.atualizado_em))
+                        .where(models.ClassificacaoProduto.empresa_id == e.id)).one()
+    return (tuple(docs), tuple(classes), json.dumps(e.premissas or {}, sort_keys=True), e.regime, e.industria,
+            e.uf, e.cod_municipio, settings.calculadora_url,
+            calculadora.identificacao().get("versao_base"))  # nova base de regras (ex.: alíquotas publicadas)
+
+
 def _analise(empresa_id: int, inicio: date | None, fim: date | None):
     with db.sessao() as s:
         e = _carregar(s, empresa_id)
-        return e, servicos.montar_analise(s, e, calculadora, inicio, fim)
+        chave = (empresa_id, inicio, fim)
+        assinatura = _assinatura_dos_dados(s, e)
+        guardado = _CACHE_ANALISES.get(chave)
+        if guardado and guardado[0] == assinatura:
+            return e, guardado[1]
+        a = servicos.montar_analise(s, e, calculadora, inicio, fim)
+        _CACHE_ANALISES[chave] = (assinatura, a)
+        return e, a
+
+
+def _ano(ano: int | None, a) -> int:
+    return ano if ano in a.premissas.anos else a.premissas.anos[0]
+
+
+# --- Fornecedores e produtos (negociação) --------------------------------------------------------------------------
+
+@app.get("/empresas/{empresa_id}/fornecedores", response_class=HTMLResponse)
+async def tela_fornecedores(request: Request, empresa_id: int, ano: int | None = None, inicio: str | None = None,
+                            fim: str | None = None, regime: str = ""):
+    di, df = _periodo(inicio, fim)
+    e, a = await run_in_threadpool(_analise, empresa_id, di, df)
+    ano = _ano(ano, a)
+    lista = negociacao.fornecedores(negociacao.compras(a, ano))
+    if regime:
+        lista = [f for f in lista if f.regime == regime]
+    return _render(request, "fornecedores.html", e=e, a=a, aba="fornecedores", ano=ano, fornecedores=lista,
+                   inicio=inicio or "", fim=fim or "", regime=regime,
+                   total_atual=sum((f.custo_atual for f in lista), negociacao.ZERO),
+                   total_ano=sum((f.custo_ano for f in lista), negociacao.ZERO))
+
+
+@app.get("/empresas/{empresa_id}/fornecedores/{cnpj}", response_class=HTMLResponse)
+async def tela_fornecedor(request: Request, empresa_id: int, cnpj: str, ano: int | None = None,
+                          inicio: str | None = None, fim: str | None = None):
+    di, df = _periodo(inicio, fim)
+    e, a = await run_in_threadpool(_analise, empresa_id, di, df)
+    ano = _ano(ano, a)
+    todas = negociacao.compras(a, ano)
+    do_fornecedor = sorted((c for c in todas if c.fornecedor == cnpj), key=lambda c: -c.variacao_custo)
+    if not do_fornecedor:
+        raise HTTPException(404, "Fornecedor sem compras no período")
+    resumo = negociacao.fornecedores(do_fornecedor)[0]
+    return _render(request, "fornecedor.html", e=e, a=a, aba="fornecedores", ano=ano, f=resumo,
+                   compras=do_fornecedor, inicio=inicio or "", fim=fim or "")
+
+
+@app.get("/empresas/{empresa_id}/produtos", response_class=HTMLResponse)
+async def tela_produtos(request: Request, empresa_id: int, ano: int | None = None, inicio: str | None = None,
+                        fim: str | None = None):
+    di, df = _periodo(inicio, fim)
+    e, a = await run_in_threadpool(_analise, empresa_id, di, df)
+    ano = _ano(ano, a)
+    lista = negociacao.produtos(a, negociacao.compras(a, ano), ano)
+    return _render(request, "produtos.html", e=e, a=a, aba="produtos", ano=ano, produtos=lista,
+                   inicio=inicio or "", fim=fim or "")
+
+
+@app.get("/empresas/{empresa_id}/produtos/{chave}", response_class=HTMLResponse)
+async def tela_produto(request: Request, empresa_id: int, chave: str, ano: int | None = None,
+                       inicio: str | None = None, fim: str | None = None):
+    di, df = _periodo(inicio, fim)
+    e, a = await run_in_threadpool(_analise, empresa_id, di, df)
+    ano = _ano(ano, a)
+    produto = next((p for p in negociacao.produtos(a, negociacao.compras(a, ano), ano) if p.chave == chave), None)
+    if not produto:
+        raise HTTPException(404, "Produto sem movimento no período")
+    compras = sorted(produto.compras, key=lambda c: (c.unidade, c.custo_unit_ano if c.custo_unit_ano is not None else 0))
+    maior = max((c.custo_unit_ano or 0 for c in compras), default=0) or 1
+    return _render(request, "produto.html", e=e, a=a, aba="produtos", ano=ano, p=produto, compras=compras,
+                   maior=maior, inicio=inicio or "", fim=fim or "")
+
+
+@app.get("/empresas/{empresa_id}/negociacao.xlsx")
+async def excel_negociacao(empresa_id: int, ano: int | None = None, inicio: str | None = None,
+                           fim: str | None = None):
+    di, df = _periodo(inicio, fim)
+    e, a = await run_in_threadpool(_analise, empresa_id, di, df)
+    ano = _ano(ano, a)
+    buffer = io.BytesIO()
+    exportar_negociacao(negociacao.compras(a, ano), ano, buffer)
+    return Response(buffer.getvalue(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="negociacao_{e.cnpj}_{ano}.xlsx"'})
 
 
 @app.get("/empresas/{empresa_id}/analise", response_class=HTMLResponse)

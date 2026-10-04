@@ -58,12 +58,13 @@ def ler_caminho(caminho: Path) -> ResultadoLeitura:
 
 
 def ler_classificacoes(conteudo: str) -> dict[str, tuple[str, str]]:
-    """CSV (; ou ,) com colunas codigo_ou_ncm, cst, cclasstrib. Código do produto tem prioridade sobre NCM."""
+    """CSV (; ou ,) com colunas chave (ean:..., cod:... ou ncm:...), cst, cclasstrib. Aceita também o formato
+    antigo, com a coluna codigo_ou_ncm. Linhas sem CST/cClassTrib são ignoradas."""
     dialeto = csv.Sniffer().sniff(conteudo.splitlines()[0], delimiters=";,")
     leitor = csv.DictReader(io.StringIO(conteudo), dialect=dialeto)
     saida = {}
     for linha in leitor:
-        chave = (linha.get("codigo_ou_ncm") or "").strip()
+        chave = (linha.get("chave") or linha.get("codigo_ou_ncm") or "").strip()
         cst, cct = (linha.get("cst") or "").strip(), (linha.get("cclasstrib") or "").strip()
         if chave and cst and cct:
             saida[chave] = (cst.zfill(3), cct.zfill(6))

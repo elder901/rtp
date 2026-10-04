@@ -44,13 +44,20 @@
   .tabela { overflow-x:auto; }
   table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
   th, td { padding:6px 10px; border-bottom:1px solid var(--borda); text-align:right; white-space:nowrap; }
-  th { font-size:12px; color:var(--suave); font-weight:600; }
+  th { font-size:12px; color:var(--suave); font-weight:600; white-space:normal; vertical-align:bottom; min-width:64px; }
   th:first-child, td:first-child, td.txt, th.txt { text-align:left; }
   td.quebra { white-space:normal; min-width:200px; }
   .sobe { color:var(--sobe); font-weight:600; } .desce { color:var(--desce); font-weight:600; }
   .alerta { background:var(--aviso-fundo); border:1px solid var(--aviso-borda); border-radius:6px; padding:8px 12px; margin:6px 0; }
   .tag { font-size:11px; padding:1px 6px; border-radius:10px; background:var(--tag); color:var(--suave); }
   .tag.padrao { background:var(--aviso-fundo); }
+  .barra { height:8px; border-radius:0 4px 4px 0; background:var(--serie); min-width:2px; }
+  .barra.atual { background:var(--neutro); }
+  tr.destaque td { background:var(--tag); }
+  .indicadores { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; }
+  .indicador { border:1px solid var(--borda); border-radius:8px; padding:12px; }
+  .indicador .valor { font-size:20px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .indicador .rotulo { font-size:12px; color:var(--suave); }
   .grafico { position:relative; }
   .grafico svg { width:100%; height:auto; display:block; }
   .dica { position:absolute; pointer-events:none; background:var(--card); border:1px solid var(--borda); border-radius:6px;
@@ -67,6 +74,8 @@
     <a href="/empresas/{{ e.id }}" class="{{ 'ativa' if aba == 'geral' }}">Dados e notas</a>
     <a href="/empresas/{{ e.id }}/classificacao" class="{{ 'ativa' if aba == 'classificacao' }}">Classificação</a>
     <a href="/empresas/{{ e.id }}/analise" class="{{ 'ativa' if aba == 'analise' }}">Análise</a>
+    <a href="/empresas/{{ e.id }}/fornecedores" class="{{ 'ativa' if aba == 'fornecedores' }}">Fornecedores</a>
+    <a href="/empresas/{{ e.id }}/produtos" class="{{ 'ativa' if aba == 'produtos' }}">Produtos</a>
     <a href="/empresas/{{ e.id }}/apuracao" class="{{ 'ativa' if aba == 'apuracao' }}">Apuração Receita</a>
   </nav>
 {% endif %}

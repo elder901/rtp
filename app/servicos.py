@@ -162,11 +162,22 @@ def classificacoes(s: Session, e: models.Empresa) -> dict[str, tuple[str, str]]:
             s.scalars(select(models.ClassificacaoProduto).where(models.ClassificacaoProduto.empresa_id == e.id))}
 
 
+def formas_da_chave(chave: str) -> list[str]:
+    """Chave com prefixo e, para código/NCM, a forma antiga sem prefixo (ajustes gravados antes do EAN)."""
+    tipo, sep, valor = chave.partition(":")
+    return [chave, valor] if sep and tipo in ("cod", "ncm") else [chave]
+
+
 def salvar_classificacao(s: Session, e: models.Empresa, chave: str, cst: str, cclasstrib: str,
                          validacao: str = "") -> models.ClassificacaoProduto | None:
-    """Grava a classificação manual; cst/cclasstrib vazios removem o ajuste."""
-    reg = s.scalar(select(models.ClassificacaoProduto).where(
-        models.ClassificacaoProduto.empresa_id == e.id, models.ClassificacaoProduto.chave == chave))
+    """Grava a classificação manual (chave ean:/cod:/ncm:); cst/cclasstrib vazios removem o ajuste."""
+    existentes = list(s.scalars(select(models.ClassificacaoProduto).where(
+        models.ClassificacaoProduto.empresa_id == e.id,
+        models.ClassificacaoProduto.chave.in_(formas_da_chave(chave)))))
+    reg = next((r for r in existentes if r.chave == chave), None)
+    for antigo in existentes:
+        if antigo is not reg:
+            s.delete(antigo)
     if not cst.strip() and not cclasstrib.strip():
         if reg:
             s.delete(reg)

@@ -15,8 +15,28 @@
       <a class="botao secundario" href="/empresas/{{ e.id }}/analise/excel?inicio={{ inicio }}&fim={{ fim }}">Excel completo</a></div>
   </form>
   <p class="suave" style="margin-bottom:0">{{ a.itens|length }} itens analisados ·
-    CBS {{ a.premissas.cbs_referencia }}% · IBS {{ a.premissas.ibs_uf_referencia + a.premissas.ibs_mun_referencia }}% (premissas)</p>
+    CBS {{ a.premissas.cbs_referencia }}% · IBS {{ a.premissas.ibs_uf_referencia + a.premissas.ibs_mun_referencia }}% (premissas)<br>
+    Calculadora RTC: {{ a.versao_calculadora }}</p>
 </div>
+
+{% if a.aliquotas_usadas %}
+<div class="card">
+  <h2>Alíquotas nominais usadas</h2>
+  <p class="suave" style="margin-top:-8px"><b>oficial</b> = base de regras da Calculadora RTC; <b>premissa</b> = alíquota de
+    referência informada em Dados e premissas, usada enquanto a oficial não é publicada. Reduções por classificação
+    (cesta básica, 60% etc.) são sempre aplicadas pela calculadora.</p>
+  <div class="tabela"><table>
+    <tr><th class="txt">Ano</th><th>CBS</th><th>IBS estadual</th><th>IBS municipal</th><th>Total</th></tr>
+    {% for ano, u in a.aliquotas_usadas.items() %}
+    <tr><td>{{ ano }}</td>
+      {% for k in ['cbs', 'ibsEstadual', 'ibsMunicipal'] %}
+      <td>{{ '%.2f'|format(u.aliquotas[k])|replace('.', ',') }}% <span class="tag {{ 'padrao' if u.origens[k] != 'oficial' }}">{{ u.origens[k] }}</span></td>
+      {% endfor %}
+      <td><b>{{ '%.2f'|format(u.aliquotas.cbs + u.aliquotas.ibsEstadual + u.aliquotas.ibsMunicipal)|replace('.', ',') }}%</b></td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endif %}
 
 {% if a.alertas %}
 <div class="card"><h2>Alertas</h2>{% for t in a.alertas %}<div class="alerta">{{ t }}</div>{% endfor %}</div>

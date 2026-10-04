@@ -10,6 +10,7 @@ e é sinalizada para tratamento à parte.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -55,8 +56,10 @@ class CalculadoraRTC:
     def __init__(self, base_url: str | None = None, client: httpx.Client | None = None):
         self.base_url = (base_url or settings.calculadora_url).rstrip("/")
         self.http = client or httpx.Client(timeout=settings.calculadora_timeout)
-        self._cache: dict[Chave, AliquotaEfetiva] = {}
+        self._cache: dict[tuple, AliquotaEfetiva] = {}
         self._cache_dados: dict[tuple, object] = {}
+        self._identificacao: dict = {}
+        self._identificacao_em = 0.0
 
     def _dados_abertos(self, caminho: str, **params):
         try:
@@ -69,6 +72,43 @@ class CalculadoraRTC:
 
     def versao(self) -> dict:
         return self._dados_abertos("versao")
+
+    def identificacao(self) -> dict:
+        """Endereço e versão (aplicativo e base de regras) usados no cálculo, para registrar em cada análise.
+        Consultada no máximo a cada 10 minutos; se a calculadora não responder, registra o erro."""
+        agora = time.monotonic()
+        if not self._identificacao or agora - self._identificacao_em > 600:
+            try:
+                v = self.versao()
+                self._identificacao = {"url": self.base_url, "versao_app": v.get("versaoApp", ""),
+                                       "versao_base": v.get("versaoDb", ""), "data_base": v.get("dataVersaoDb", ""),
+                                       "ambiente": v.get("ambiente", "")}
+            except ErroCalculadora as e:
+                self._identificacao = {"url": self.base_url, "erro": str(e)}
+            self._identificacao_em = agora
+        return dict(self._identificacao)
+
+    def aliquota_oficial(self, esfera: str, data: str, codigo: int | None = None) -> Decimal | None:
+        """Alíquota vigente na base de regras da calculadora (esfera: uniao | uf | municipio), ou None se a Receita
+        ainda não a publicou para a data. Usa a alíquota própria do ente quando houver; senão, a de referência."""
+        rotas = {"uniao": ("aliquota-uniao", {}), "uf": ("aliquota-uf", {"codigoUf": codigo}),
+                 "municipio": ("aliquota-municipio", {"codigoMunicipio": codigo})}
+        caminho, params = rotas[esfera]
+        chave = ("aliquota", esfera, codigo, data)
+        if chave not in self._cache_dados:
+            try:
+                r = self.http.get(f"{self.base_url}/calculadora/dados-abertos/{caminho}", params={**params, "data": data})
+            except httpx.HTTPError as e:
+                raise ErroCalculadora(f"falha de comunicação com a calculadora: {e}") from e
+            if r.status_code == 404:
+                self._cache_dados[chave] = None
+            elif r.status_code != 200:
+                raise ErroCalculadora(f"HTTP {r.status_code} em {caminho}: {r.text[:200]}")
+            else:
+                corpo = r.json()
+                valor = corpo.get("aliquotaPropria", corpo.get("aliquotaReferencia"))
+                self._cache_dados[chave] = Decimal(str(valor)) if valor is not None else None
+        return self._cache_dados[chave]
 
     def situacoes_tributarias(self, data: str = "2027-01-01") -> dict[str, dict]:
         """CST -> {descricao, classificacoes: {cClassTrib: descricao}} válidos para NF-e na data."""
@@ -91,7 +131,12 @@ class CalculadoraRTC:
 
     def aliquotas(self, chaves: set[Chave], nominais_por_ano: dict[int, dict[str, float]],
                   uf: str, municipio: int) -> dict[Chave, AliquotaEfetiva]:
-        faltantes = sorted((c for c in chaves if c not in self._cache),
+        # O resultado depende das alíquotas nominais informadas: elas entram na chave do cache, senão empresas com
+        # premissas (ou alíquotas municipais) diferentes receberiam o cálculo umas das outras.
+        def k(c: Chave) -> tuple:
+            return c, tuple(sorted(nominais_por_ano[c.ano].items()))
+
+        faltantes = sorted((c for c in chaves if k(c) not in self._cache),
                            key=lambda c: (c.ano, c.ncm, c.cst, c.cclasstrib))
         por_ano: dict[int, list[Chave]] = {}
         for c in faltantes:
@@ -99,16 +144,18 @@ class CalculadoraRTC:
         for ano, lista in por_ano.items():
             for i in range(0, len(lista), LOTE):
                 self._consultar_lote(lista[i:i + LOTE], ano, nominais_por_ano[ano], uf, municipio)
-        return {c: self._cache[c] for c in chaves}
+        return {c: self._cache[k(c)] for c in chaves}
 
     def _consultar_lote(self, lote: list[Chave], ano: int, nominais: dict, uf: str, municipio: int):
+        assinatura = tuple(sorted(nominais.items()))
         try:
             resultado = self._regime_geral(lote, ano, nominais, uf, municipio)
             for chave, obj in zip(lote, resultado):
-                self._cache[chave] = obj
+                self._cache[(chave, assinatura)] = obj
         except ErroCalculadora as e:
             if len(lote) == 1:
-                self._cache[lote[0]] = AliquotaEfetiva(Decimal(0), Decimal(0), Decimal(0), Decimal(0), erro=str(e))
+                self._cache[(lote[0], assinatura)] = AliquotaEfetiva(Decimal(0), Decimal(0), Decimal(0), Decimal(0),
+                                                                     erro=str(e))
                 return
             # Um item inválido derruba o lote inteiro: refaz um a um para isolar o erro.
             for chave in lote:

@@ -46,6 +46,10 @@ class CalculadoraFake:
     def versao(self):
         return {"versaoApp": "fake"}
 
+    def identificacao(self):
+        return {"url": "fake", "versao_app": "1.0-teste", "versao_base": "V0000", "data_base": "2026-01-01",
+                "ambiente": "teste"}
+
 
 @pytest.fixture
 def banco(tmp_path):

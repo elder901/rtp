@@ -11,6 +11,7 @@
   python -m app.cli apuracao verificar [--cnpj ...]
   python -m app.cli apuracao importar --cnpj ... --arquivo retorno.json
   python -m app.cli apuracao conciliar --cnpj ... [--pa-inicio 2026-01] [--pa-fim 2026-03] [--saida conciliacao.xlsx]
+  python -m app.cli calculadora status | atualizar [--forcar] | iniciar | parar     (calculadora RTC local)
   python -m app.cli analisar ...   (análise avulsa de uma pasta, sem gravar no banco)
 """
 from __future__ import annotations
@@ -52,7 +53,8 @@ def _imprimir_resumo(analise: Analise, destino: Path):
               f"saldo {l['saldo_a_recolher']:>14,.2f}{var}")
     for t in analise.alertas:
         print("  ! " + t)
-    print(f"\nRelatório: {exportar(analise, destino).resolve()}")
+    print(f"\nCalculadora RTC: {analise.versao_calculadora}")
+    print(f"Relatório: {exportar(analise, destino).resolve()}")
 
 
 def _empresa(s, cnpj: str) -> models.Empresa:
@@ -178,6 +180,40 @@ def _exportar_conciliacao(conc, destino: Path):
     wb.save(destino)
 
 
+def cmd_calculadora(a):
+    from app.calculadora import offline
+
+    try:
+        if a.acao == "status":
+            info = offline.status()
+            print(f"Instalada: {info.get('instalada') or 'não'} | rodando: {'sim' if info['rodando'] else 'não'} "
+                  f"({info['url_local']})")
+            if info.get("versao"):
+                v = info["versao"]
+                print(f"Versão local: app {v.get('versaoApp')} · base {v.get('versaoDb')} ({v.get('dataVersaoDb')})")
+            st = info.get("versao_status") or {}
+            if st:
+                ok = st.get("aplicacaoAtualizada") and st.get("dbAtualizada")
+                print(f"Segundo a própria calculadora: {'atualizada' if ok else 'DESATUALIZADA'} "
+                      f"(remota: app {st.get('versaoAplicacaoRemota')} · base {st.get('versaoDbRemota')})")
+            if "pacote_remoto" in info:
+                r = info["pacote_remoto"]
+                print(f"Pacote oficial: {r['ultima_modificacao']} ({r['tamanho'] / 1e6:.0f} MB) — "
+                      f"{'ATUALIZAÇÃO DISPONÍVEL' if info['atualizacao_disponivel'] else 'igual ao instalado'}")
+            for chave in ("erro_versao", "erro_remoto"):
+                if info.get(chave):
+                    print("!", info[chave])
+        elif a.acao == "atualizar":
+            offline.atualizar(forcar=a.forcar)
+        elif a.acao == "iniciar":
+            print(f"Calculadora local em {offline.url_local()} (PID {offline.iniciar_atual()}).")
+        elif a.acao == "parar":
+            offline.parar_atual()
+            print("Calculadora local parada.")
+    except offline.ErroOffline as erro:
+        sys.exit(str(erro))
+
+
 def cmd_analisar(a):
     premissas = Premissas(industria=a.industria, anos=_anos(a.anos))
     for campo, valor in [("cbs_referencia", a.cbs), ("ibs_uf_referencia", a.ibs_uf),
@@ -245,6 +281,11 @@ def main(argv: list[str] | None = None):
     pp.add_argument("--pa-fim", help="AAAA-MM")
     pp.add_argument("--saida", type=Path)
     pp.set_defaults(func=cmd_apuracao)
+
+    pk = sub.add_parser("calculadora", help="calculadora RTC local: status, atualizar, iniciar, parar")
+    pk.add_argument("acao", choices=["status", "atualizar", "iniciar", "parar"])
+    pk.add_argument("--forcar", action="store_true", help="atualizar mesmo sem versão nova ou com divergência")
+    pk.set_defaults(func=cmd_calculadora)
 
     pa = sub.add_parser("analisar", help="análise avulsa de uma pasta/ZIP, sem gravar no banco")
     pa.add_argument("--cnpj", required=True)

@@ -11,6 +11,8 @@ from pathlib import Path
 
 from lxml import etree
 
+from app.produto import chave_produto, gtin_global
+
 ZERO = Decimal("0")
 
 # CRT do emitente: 1 = Simples Nacional, 2 = Simples (excesso de sublimite), 3 = Regime Normal, 4 = MEI
@@ -81,7 +83,11 @@ class Item:
     pis_cst: str = ""
     v_issqn: Decimal = ZERO
     ibscbs: IBSCBSDestacado | None = None
-    gtin: str = ""  # cEAN; liga a compra e a venda do mesmo produto mesmo com códigos diferentes
+    # EAN que identifica o produto (prefere o da unidade tributável, cEANTrib, ao da embalagem, cEAN) e a
+    # unidade/quantidade correspondentes — liga compra e venda do mesmo produto mesmo com códigos diferentes.
+    gtin: str = ""
+    unidade_gtin: str = ""
+    quantidade_gtin: Decimal = ZERO
 
     @property
     def tributos_por_dentro(self) -> Decimal:
@@ -92,6 +98,10 @@ class Item:
     def tributos_por_fora(self) -> Decimal:
         """Tributos atuais somados ao valor do produto (IPI, ICMS-ST, FCP-ST)."""
         return self.v_ipi + self.v_icms_st + self.v_fcp_st
+
+    @property
+    def chave(self) -> str:
+        return chave_produto(self.gtin, self.codigo)
 
     @property
     def valor_operacao(self) -> Decimal:
@@ -178,10 +188,6 @@ def _grupo_unico(pai):
     return filhos[0] if filhos else None
 
 
-def _gtin(valor: str) -> str:
-    return valor if valor.isdigit() and len(valor) in (8, 12, 13, 14) else ""  # descarta "SEM GTIN"
-
-
 def _item(det) -> Item:
     prod = det.find("prod")
     imp = det.find("imposto")
@@ -198,8 +204,12 @@ def _item(det) -> Item:
         v_seg=_d(prod, "vSeg"),
         v_outro=_d(prod, "vOutro"),
         v_desc=_d(prod, "vDesc"),
-        gtin=_gtin(_t(prod, "cEAN")) or _gtin(_t(prod, "cEANTrib")),
     )
+    gtin_trib, gtin_com = gtin_global(_t(prod, "cEANTrib")), gtin_global(_t(prod, "cEAN"))
+    if gtin_trib:
+        item.gtin, item.unidade_gtin, item.quantidade_gtin = gtin_trib, _t(prod, "uTrib"), _d(prod, "qTrib")
+    elif gtin_com:
+        item.gtin, item.unidade_gtin, item.quantidade_gtin = gtin_com, item.unidade, item.quantidade
     if imp is None:
         return item
 

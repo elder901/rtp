@@ -56,6 +56,28 @@ class Premissas:
     industria: bool = False
     anos: list[int] = field(default_factory=lambda: list(TRANSICAO))
 
+    def aliquotas_do_ano(self, ano: int, calculadora=None, codigo_uf: int | None = None,
+                         cod_municipio: int | None = None) -> tuple[dict[str, float], dict[str, str]]:
+        """Alíquotas nominais do ano e a origem de cada uma ("oficial" = base de regras da calculadora;
+        "premissa" = alíquota de referência informada aqui, enquanto a oficial não for publicada)."""
+        nominais = self.aliquotas_nominais(ano)
+        origens = {k: "premissa" for k in nominais}
+        if calculadora is None or not hasattr(calculadora, "aliquota_oficial"):
+            return nominais, origens
+        data = f"{ano}-01-15"
+        for campo, esfera, codigo in (("cbs", "uniao", None), ("ibsEstadual", "uf", codigo_uf),
+                                      ("ibsMunicipal", "municipio", cod_municipio)):
+            if esfera != "uniao" and not codigo:
+                continue
+            try:
+                oficial = calculadora.aliquota_oficial(esfera, data, codigo)
+            except Exception:  # noqa: BLE001 — calculadora fora do ar: mantém a premissa, com a origem indicada
+                origens[campo] = "premissa (calculadora indisponível)"
+                continue
+            if oficial is not None:
+                nominais[campo], origens[campo] = float(oficial), "oficial"
+        return nominais, origens
+
     def aliquotas_nominais(self, ano: int) -> dict[str, float]:
         """Alíquotas nominais (%) a enviar à calculadora para o ano informado."""
         t = TRANSICAO[ano]

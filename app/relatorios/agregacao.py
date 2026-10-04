@@ -46,14 +46,15 @@ def resumo(a: Analise) -> list[dict]:
 
 
 def _custos_por_gtin(a: Analise) -> dict[tuple[str, str], dict]:
-    """Custo efetivo unitário de compra (após créditos) por (GTIN, unidade), no cenário atual e em cada ano."""
+    """Custo efetivo unitário de compra (após créditos) por (EAN, unidade), no cenário atual e em cada ano.
+    Usa a unidade e a quantidade do EAN escolhido (a tributável, quando o XML traz cEANTrib)."""
     grupos: dict[tuple[str, str], list[ResultadoItem]] = defaultdict(list)
     for r in a.itens:
-        if r.direcao == "entrada" and r.item.gtin and r.item.quantidade:
-            grupos[(r.item.gtin, r.item.unidade.upper())].append(r)
+        if r.direcao == "entrada" and r.item.gtin and r.item.quantidade_gtin:
+            grupos[(r.item.gtin, r.item.unidade_gtin.upper())].append(r)
     custos = {}
     for k, rs in grupos.items():
-        qtd = sum((r.item.quantidade for r in rs), ZERO)
+        qtd = sum((r.item.quantidade_gtin for r in rs), ZERO)
         c = {"atual": sum((r.atual.custo_ou_receita(r.item.valor_liquido) for r in rs), ZERO) / qtd}
         for ano in a.premissas.anos:
             c[ano] = sum((r.anos[ano].custo_ou_receita(r.item.valor_liquido) for r in rs), ZERO) / qtd
@@ -65,17 +66,18 @@ def por_produto(a: Analise) -> list[dict]:
     grupos: dict[str, list[ResultadoItem]] = defaultdict(list)
     for r in a.itens:
         if r.direcao == "saida":
-            grupos[r.item.codigo].append(r)
+            grupos[r.item.chave].append(r)   # EAN; sem EAN global, o código
     custos = _custos_por_gtin(a)
     linhas = []
-    for codigo, rs in grupos.items():
+    for chave, rs in grupos.items():
         i0 = rs[0]
         vl = sum((r.item.valor_liquido for r in rs), ZERO)
         trib_atual = sum((r.atual.tributos for r in rs), ZERO)
-        qtd = sum((r.item.quantidade for r in rs), ZERO)
-        custo = custos.get((i0.item.gtin, i0.item.unidade.upper())) if i0.item.gtin else None
+        qtd = sum((r.item.quantidade_gtin for r in rs), ZERO)
+        custo = custos.get((i0.item.gtin, i0.item.unidade_gtin.upper())) if i0.item.gtin else None
         linha = {
-            "codigo": codigo, "descricao": i0.item.descricao, "ncm": i0.item.ncm, "gtin": i0.item.gtin,
+            "chave": chave, "codigo": i0.item.codigo, "descricao": i0.item.descricao, "ncm": i0.item.ncm,
+            "gtin": i0.item.gtin,
             "cst": i0.classificacao.cst, "cclasstrib": i0.classificacao.cclasstrib,
             "origem_classificacao": i0.classificacao.origem,
             "quantidade": sum((r.item.quantidade for r in rs), ZERO),
@@ -135,19 +137,20 @@ def classificacao(a: Analise) -> list[dict]:
     vistos: dict[tuple, dict] = {}
     ultimo = a.premissas.anos[-1]
     for r in a.itens:
-        k = (r.direcao, r.item.codigo, r.item.ncm)
+        k = (r.direcao, r.item.chave)
         if k in vistos:
             continue
         aliq = r.aliquotas.get(ultimo)
         vistos[k] = {
-            "direcao": r.direcao, "codigo": r.item.codigo, "descricao": r.item.descricao, "ncm": r.item.ncm,
+            "direcao": r.direcao, "chave": r.item.chave, "ean": r.item.gtin, "codigo": r.item.codigo,
+            "descricao": r.item.descricao, "ncm": r.item.ncm,
             "cst": r.classificacao.cst, "cclasstrib": r.classificacao.cclasstrib,
             "origem": r.classificacao.origem,
             "reducao_pct": aliq.reducao_pct if aliq else None,
             f"aliquota_efetiva_{ultimo}_pct": aliq.total if aliq else None,
             "erro_calculadora": aliq.erro if aliq else "",
         }
-    return sorted(vistos.values(), key=lambda l: (l["origem"] != "padrao", l["direcao"], l["codigo"]))
+    return sorted(vistos.values(), key=lambda l: (l["origem"] != "padrao", l["direcao"], l["chave"]))
 
 
 def itens(a: Analise) -> list[dict]:
@@ -155,7 +158,7 @@ def itens(a: Analise) -> list[dict]:
     for r in a.itens:
         l = {
             "direcao": r.direcao, "data": r.documento.emissao.date(), "nf": r.documento.numero,
-            "chave": r.documento.chave, "participante": r.contraparte.nome, "cnpj_participante": r.contraparte.cnpj,
+            "chave": r.documento.chave, "participante": r.contraparte.nome, "ean": r.item.gtin, "cnpj_participante": r.contraparte.cnpj,
             "regime_participante": r.contraparte.regime, "item": r.item.n_item, "codigo": r.item.codigo,
             "descricao": r.item.descricao, "ncm": r.item.ncm, "cfop": r.item.cfop,
             "cst": r.classificacao.cst, "cclasstrib": r.classificacao.cclasstrib,
@@ -185,11 +188,14 @@ def premissas(a: Analise) -> list[dict]:
         {"premissa": "Crédito de fornecedor do Simples (% do valor)", "valor": p.credito_fornecedor_simples_pct},
         {"premissa": "Crédito de fornecedor MEI (% do valor)", "valor": p.credito_fornecedor_mei_pct},
         {"premissa": "Indústria (credita IPI hoje)", "valor": "sim" if p.industria else "não"},
+        {"premissa": "Calculadora RTC usada", "valor": a.versao_calculadora},
     ]
     if a.empresa.regime == "simples":
         linhas.append({"premissa": "Alíquota efetiva do DAS (%)", "valor": p.aliquota_das_pct})
     for ano in p.anos:
-        n = p.aliquotas_nominais(ano)
+        usada = a.aliquotas_usadas.get(ano) or {"aliquotas": p.aliquotas_nominais(ano), "origens": {}}
+        n, o = usada["aliquotas"], usada["origens"]
         linhas.append({"premissa": f"Alíquotas nominais {ano} (CBS / IBS UF / IBS mun.)",
-                       "valor": f"{n['cbs']:.2f} / {n['ibsEstadual']:.2f} / {n['ibsMunicipal']:.2f}"})
+                       "valor": " / ".join(f"{n[k]:.2f} ({o.get(k, 'premissa')})"
+                                           for k in ("cbs", "ibsEstadual", "ibsMunicipal"))})
     return linhas

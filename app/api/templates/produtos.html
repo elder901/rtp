@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% macro var(v) -%}
+  {%- if v is none %}<span class="suave">—</span>
+  {%- elif v > 0 %}<span class="sobe">+{{ v|pct }}</span>
+  {%- elif v < 0 %}<span class="desce">{{ v|pct }}</span>
+  {%- else %}0%{% endif -%}
+{%- endmacro %}
+{% block conteudo %}
+<div class="card" style="border-top-left-radius:0">
+  {% include "_filtros.html" %}
+  <div class="acoes"><input id="filtro" placeholder="Filtrar por EAN, código, descrição ou NCM" style="max-width:340px">
+    <label class="check"><input type="checkbox" id="multi"> Só com mais de um fornecedor</label></div>
+</div>
+
+<div class="card">
+  <h2>Produtos — venda e compra, hoje × {{ ano }}</h2>
+  <div class="tabela"><table id="tabela">
+    <tr><th class="txt">Produto</th><th class="txt">EAN</th><th class="txt">NCM</th><th class="txt">cClassTrib</th>
+        <th>Vendas líquidas</th><th>Carga venda hoje</th><th>Carga {{ ano }}</th><th>Δ preço de venda</th>
+        <th>Fornecedores</th><th>Custo compra hoje</th><th>Custo {{ ano }}</th><th>Δ custo</th><th>Economia possível</th></tr>
+    {% for p in produtos %}
+    <tr data-busca="{{ (p.gtin ~ ' ' ~ p.codigos|join(' ') ~ ' ' ~ p.descricao ~ ' ' ~ p.ncm)|lower }}" data-forn="{{ p.fornecedores }}">
+      <td class="txt quebra"><a href="/empresas/{{ e.id }}/produtos/{{ p.chave }}?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">{{ p.descricao }}</a>
+        <br><span class="suave">{{ p.codigos|join(', ') }}</span></td>
+      <td class="txt" style="font-family:monospace">{{ p.gtin or '—' }}</td><td class="txt">{{ p.ncm }}</td>
+      <td class="txt">{{ p.cclasstrib }} <span class="tag {{ p.origem_classificacao }}">{{ p.origem_classificacao }}</span></td>
+      <td>{{ p.vendas_liquidas|brl if p.vendas_liquidas else '—' }}</td>
+      <td>{{ p.carga_venda_atual_pct|pct }}</td><td>{{ p.carga_venda_ano_pct|pct }}</td><td>{{ var(p.variacao_preco_venda_pct) }}</td>
+      <td>{{ p.fornecedores or '—' }}</td>
+      <td>{{ p.custo_atual|brl if p.compras else '—' }}</td><td>{{ p.custo_ano|brl if p.compras else '—' }}</td>
+      <td>{{ var(p.variacao_custo_pct) if p.compras else '—' }}</td>
+      <td>{{ p.economia_possivel|brl if p.economia_possivel else '—' }}</td></tr>
+    {% else %}<tr><td colspan="13" class="txt suave">Nenhum produto no período.</td></tr>{% endfor %}
+  </table></div>
+</div>
+<script>
+  const filtro = document.getElementById('filtro'), multi = document.getElementById('multi');
+  function filtrar() {
+    const q = filtro.value.trim().toLowerCase();
+    document.querySelectorAll('#tabela tr[data-busca]').forEach(tr => {
+      tr.hidden = (q && !tr.dataset.busca.includes(q)) || (multi.checked && Number(tr.dataset.forn) < 2);
+    });
+  }
+  filtro.addEventListener('input', filtrar); multi.addEventListener('change', filtrar);
+</script>
+{% endblock %}

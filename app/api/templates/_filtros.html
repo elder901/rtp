@@ -1,0 +1,13 @@
+<form method="get" class="grade" style="align-items:end">
+  <div><label>Comparar hoje com</label><select name="ano">
+    {% for x in a.premissas.anos %}<option value="{{ x }}" {{ 'selected' if x == ano }}>{{ x }}</option>{% endfor %}</select></div>
+  <div><label>Compras emitidas de</label><input type="date" name="inicio" value="{{ inicio }}"></div>
+  <div><label>até</label><input type="date" name="fim" value="{{ fim }}"></div>
+  {% if regime is defined %}
+  <div><label>Regime do fornecedor</label><select name="regime">
+    {% for v, t in [('', 'Todos'), ('normal', 'Regime normal'), ('simples', 'Simples'), ('mei', 'MEI'), ('nao_contribuinte', 'Não contribuinte')] %}
+    <option value="{{ v }}" {{ 'selected' if regime == v }}>{{ t }}</option>{% endfor %}</select></div>
+  {% endif %}
+  <div class="acoes" style="margin:0"><button type="submit">Atualizar</button>
+    <a class="botao secundario" href="/empresas/{{ e.id }}/negociacao.xlsx?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">Excel para negociação</a></div>
+</form>

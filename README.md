@@ -67,6 +67,21 @@ Configurações em variáveis de ambiente ou `.env` — veja `.env.example`.
 - O servidor escuta só em `127.0.0.1`. Antes de expô-lo na rede, defina `RTP_USUARIO`/`RTP_SENHA` (login básico) e
   use HTTPS. Login por usuário e isolamento por cliente são a fase 4.
 
+## Fornecedores e produtos (negociação)
+
+Abas **Fornecedores** e **Produtos**, comparando hoje com o ano escolhido da transição (padrão 2027):
+
+- **Custo efetivo** de compra = preço pago − créditos aproveitáveis, por fornecedor e por produto.
+- **Preço de equilíbrio**: variação do preço líquido do fornecedor que mantém o seu custo de hoje no ano analisado.
+  Tributos e créditos são proporcionais ao preço líquido, então é `custo hoje / custo no ano − 1`. Negativo = desconto
+  a negociar (típico de fornecedor do Simples, que transfere pouco crédito); positivo = folga para aceitar reajuste.
+- **Melhor fornecedor do mesmo produto** (mesmo EAN e mesma unidade) no ano e a **economia** se o volume fosse comprado
+  dele. Na tela do produto, todos os fornecedores lado a lado.
+- **Excel para negociação**: resumo por fornecedor e a planilha fornecedor × produto.
+
+As telas reaproveitam a mesma análise, que fica em cache e é recalculada só quando notas, classificações ou premissas
+mudam.
+
 ## Apuração assistida da CBS (API da Receita)
 
 Documentação oficial: https://docs.receitafederal.gov.br/apuracao-cbs/ — `app/apuracao/`.
@@ -102,22 +117,60 @@ repassando a mudança do custo de compra após créditos. Compra e venda do mesm
 
 ## Calculadora RTC
 
-- Padrão: instância pública da Receita. Só são enviados NCM, CST, cClassTrib, base fictícia de R$ 1.000 e as
-  alíquotas — nenhum CNPJ, valor ou dado do cliente.
-- Produção: rodar a calculadora offline (Docker ou JAR, Java 17+) de
-  https://consumo.tributos.gov.br/servico/calcular-tributos-consumo/calculadora/calculadora-offline
-  e apontar `RTP_CALCULADORA_URL` para ela.
-- Swagger: https://consumo.tributos.gov.br/servico/calcular-tributos-consumo/api/swagger-ui/index.html
+O cálculo de CBS/IBS de cada item é feito pela Calculadora de Tributos oficial. A versão usada (aplicativo e base
+de regras) fica registrada em cada análise, no painel e na aba Premissas do Excel.
+
+### Calculadora local (offline) — recomendada
+
+```bash
+.venv/Scripts/python -m app.cli calculadora atualizar     # instala ou atualiza, com validação
+.venv/Scripts/python -m app.cli calculadora status        # versão local, se está atualizada, pacote oficial
+.venv/Scripts/python -m app.cli calculadora iniciar       # após reiniciar o computador (o servidor web também inicia)
+.venv/Scripts/python -m app.cli calculadora parar
+```
+
+Com `RTP_CALCULADORA_URL=http://localhost:8080/api` no `.env`, nenhuma consulta sai do computador.
+
+- **Origem**: não há repositório oficial no GitHub. O pacote oficial (`calculadora.zip`, ~340 MB, com o código-fonte
+  do backend e a versão compilada) é distribuído pelo portal da Receita: `{calculadora pública}/calculadora/download/url`
+  devolve o link no armazenamento do SERPRO. Repositórios no GitHub são espelhos de terceiros.
+- **Como roda aqui**: o instalador oficial para Windows usa WSL (`wsl --install`, `wsl --shutdown`), o que altera o
+  sistema e derruba outras distribuições WSL. Em vez disso o sistema extrai do pacote só o motor
+  (`api-regime-geral.jar`, Spring Boot, Java 21) e a base de regras (`calculadora-pro.db`) e roda com um **Java 21
+  portátil** (Eclipse Temurin, checksum conferido) em `dados/calculadora/jre` — sem instalar nada no Windows.
+  API na porta 8080 (`/api`), saúde na 9101 (`/health`).
+- **Atualização** (`calculadora atualizar`): compara o ETag do pacote oficial com o instalado → baixa e extrai numa
+  pasta nova → sobe a nova versão em portas de teste (8090/9191) e compara casos de referência (integral, cesta
+  básica, hortifruti, alimentos 60%, em 2027/2029/2033) com a calculadora pública → só se tudo bater, troca nas portas
+  oficiais; se a nova não subir, volta a anterior. Guarda a versão atual e a anterior; estado em
+  `dados/calculadora/atual.json`, logs em `dados/calculadora/logs/`.
+- A própria calculadora local expõe `/api/versao/status`, que diz se aplicativo e base de regras estão atualizados
+  em relação à Receita (o `status` mostra).
+- Para atualizar todo dia, agende no Agendador de Tarefas do Windows o comando
+  `.venv\Scripts\python -m app.cli calculadora atualizar` com a pasta do projeto como diretório inicial.
+
+### Calculadora pública
+
+Sem `.env`, usa a instância pública da Receita. Só são enviados NCM, CST, cClassTrib, base fictícia de R$ 1.000 e as
+alíquotas — nenhum CNPJ, valor ou dado do cliente. Swagger:
+https://consumo.tributos.gov.br/servico/calcular-tributos-consumo/api/swagger-ui/index.html
 
 A calculadora é chamada uma vez por combinação (NCM, CST, cClassTrib, ano); o resultado vira alíquota efetiva já
 com as reduções da Receita (cesta básica, 60%, 30% etc.). Os dados abertos dela também validam a classificação.
 
-## Classificação (cClassTrib)
+## Produtos e classificação (cClassTrib)
 
-Ordem usada: **ajuste manual** (por código do produto ou por NCM) → **grupo IBSCBS do XML** → **padrão 000/000001**
-(tributação integral, com alerta). Na aba Classificação, produtos sem código recebem como sugestão o cClassTrib que
-os fornecedores usaram para o mesmo NCM; cada ajuste é conferido na calculadora (CST existe, cClassTrib pertence ao
-CST e se aplica ao NCM). Exportação/importação em CSV `codigo_ou_ncm;cst;cclasstrib`.
+O produto é identificado pelo **EAN** (`cEANTrib`, o da unidade tributável, ou `cEAN`), que liga a compra (código
+do fornecedor) e a venda (código da loja). Sem EAN global — "SEM GTIN", dígito verificador inválido ou código de
+circulação restrita (prefixo 2: balança, açougue, padaria) — vale o código interno.
+
+Ordem usada no cálculo: **ajuste manual** (EAN → código → NCM) → **grupo IBSCBS do XML** → **padrão 000/000001**
+(tributação integral, com alerta). Na aba Classificação cada linha reúne compra e venda do mesmo EAN; o "em uso"
+reflete a venda. A sugestão vem do cClassTrib que o fornecedor informou **para o mesmo EAN** (evidência forte; há um
+botão para aplicar todas de uma vez) ou, na falta, para o mesmo NCM. Cada ajuste é conferido na calculadora (CST
+existe, cClassTrib pertence ao CST e se aplica ao NCM). NCM diferente entre fornecedor e loja para o mesmo EAN é
+sinalizado. CSV: `chave;cst;cclasstrib` com chave `ean:...`, `cod:...` ou `ncm:...` (o formato antigo
+`codigo_ou_ncm` continua aceito).
 
 ## Metodologia
 
@@ -133,7 +186,15 @@ CST e se aplica ao NCM). Exportação/importação em CSV `codigo_ou_ncm;cst;ccl
 - **Transição** (`app/engine/premissas.py`): 2027–28 CBS cheia −0,1 p.p. e IBS 0,1%; PIS/COFINS e IPI extintos;
   2029–32 ICMS/ISS a 90/80/70/60% e IBS a 10/20/30/40%; 2033 só CBS/IBS. 2026 é ano de teste (CBS 0,9% e IBS
   0,1% compensáveis), portanto igual ao cenário atual.
-- Alíquotas de referência (padrão CBS 8,8% + IBS 17,7%) são premissas editáveis por empresa.
+- **Alíquotas**: a base de regras da calculadora só tem as alíquotas de 2026 (teste); de 2027 em diante ela exige
+  que quem chama as informe. Para cada ano o sistema consulta primeiro a alíquota oficial na calculadora (União,
+  UF e município da empresa, usando a alíquota própria do ente quando houver) e só na falta usa a alíquota de
+  referência das premissas (padrão CBS 8,8% + IBS 17,7%). A origem de cada alíquota ("oficial" ou "premissa") aparece
+  no painel e no Excel; quando a Receita publicar, as oficiais passam a valer sem mudança no sistema. As reduções por
+  classificação são sempre da calculadora.
+- **Premissas** são só o que a calculadora precisa receber e que ainda não está em lei ou nos XMLs: alíquotas de
+  referência, crédito de fornecedor do Simples/MEI, crédito presumido de produtor rural e, para empresas do Simples,
+  DAS efetivo e sua repartição (esses campos só aparecem quando o regime é Simples).
 
 ## Limitações conhecidas
 
@@ -141,7 +202,10 @@ CST e se aplica ao NCM). Exportação/importação em CSV `codigo_ou_ncm;cst;ccl
 - Não trata Imposto Seletivo, monofasia (combustíveis), ZFM nem PIS/COFINS monofásico — itens sinalizados quando
   identificáveis.
 - Empresas do Simples: o DAS efetivo e sua repartição são premissas informadas (não há XML do DAS).
-- Preço neutro depende de GTIN e unidade iguais na compra e na venda; caixa × unidade não é convertida.
+- Preço neutro depende de EAN e unidade iguais na compra e na venda; usa o EAN/unidade tributável quando o XML traz
+  `cEANTrib`, mas caixa × unidade sem `cEANTrib` não é convertida.
+- Imposto Seletivo não é calculado: a calculadora exige os dados do IS para NCMs sujeitos a ele (ex.: bebidas
+  açucaradas, 2202) e recusa o item, que fica com CBS/IBS zerado e alerta.
 - A API de apuração foi implementada pela documentação oficial e testada com respostas simuladas; a primeira
   solicitação real deve ser feita em produção restrita (piloto).
 - Só NF-e/NFC-e. CT-e e NFS-e entram depois.

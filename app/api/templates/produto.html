@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% macro var(v, inverso=false) -%}
+  {%- if v is none %}<span class="suave">—</span>
+  {%- elif (v > 0) != inverso and v != 0 %}<span class="sobe">{{ '+' if v > 0 }}{{ v|pct }}</span>
+  {%- elif v != 0 %}<span class="desce">{{ '+' if v > 0 }}{{ v|pct }}</span>
+  {%- else %}0%{% endif -%}
+{%- endmacro %}
+{% set nomes_regime = {'normal': 'Normal', 'simples': 'Simples', 'mei': 'MEI', 'nao_contribuinte': 'Não contribuinte'} %}
+{% block conteudo %}
+<div class="card" style="border-top-left-radius:0">
+  <p style="margin-top:0"><a href="/empresas/{{ e.id }}/produtos?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">← Produtos</a></p>
+  <h2 style="margin-bottom:2px">{{ p.descricao }}</h2>
+  <p class="suave" style="margin-top:0">{{ ('EAN ' ~ p.gtin) if p.gtin else 'Sem EAN global' }} · códigos {{ p.codigos|join(', ') }} ·
+    NCM {{ p.ncm }} · cClassTrib {{ p.cclasstrib }} <span class="tag {{ p.origem_classificacao }}">{{ p.origem_classificacao }}</span>
+    · <a href="/empresas/{{ e.id }}/classificacao">revisar classificação</a></p>
+  {% include "_filtros.html" %}
+</div>
+
+<div class="card">
+  <div class="indicadores">
+    <div class="indicador"><div class="rotulo">Vendas líquidas</div><div class="valor">{{ p.vendas_liquidas|brl if p.vendas_liquidas else '—' }}</div></div>
+    <div class="indicador"><div class="rotulo">Carga na venda: hoje → {{ ano }}</div>
+      <div class="valor">{{ p.carga_venda_atual_pct|pct }} → {{ p.carga_venda_ano_pct|pct }}</div></div>
+    <div class="indicador"><div class="rotulo">Δ preço de venda (receita constante)</div><div class="valor">{{ var(p.variacao_preco_venda_pct) }}</div></div>
+    <div class="indicador"><div class="rotulo">Δ custo de compra</div><div class="valor">{{ var(p.variacao_custo_pct) if p.compras else '—' }}</div></div>
+    <div class="indicador"><div class="rotulo">Economia escolhendo o melhor fornecedor</div>
+      <div class="valor">{{ p.economia_possivel|brl if p.economia_possivel else '—' }}</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Fornecedores deste produto — custo efetivo unitário</h2>
+  {% if not compras %}<p class="suave">Sem compras no período.</p>{% else %}
+  <p class="suave" style="margin-top:-6px">Comparação só entre compras na mesma unidade. Barras: custo unitário hoje
+    (cinza) e em {{ ano }} (azul), na mesma escala.</p>
+  <div class="tabela"><table>
+    <tr><th class="txt">Fornecedor</th><th class="txt">Regime</th><th class="txt">Un.</th><th>Qtd.</th><th>Preço unit. pago</th>
+        <th>Crédito unit. hoje</th><th>Crédito unit. {{ ano }}</th><th>Custo unit. hoje</th><th>Custo unit. {{ ano }}</th>
+        <th class="txt" style="min-width:160px">Hoje × {{ ano }}</th><th>Variação</th><th>Preço de equilíbrio</th></tr>
+    {% for c in compras %}
+    <tr class="{{ 'destaque' if c.melhor is sameas c }}">
+      <td class="txt"><a href="/empresas/{{ e.id }}/fornecedores/{{ c.fornecedor }}?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">{{ c.fornecedor_nome }}</a>
+        {% if c.melhor is sameas c %}<span class="tag">melhor em {{ ano }}</span>{% endif %}<br><span class="suave">{{ c.fornecedor }}</span></td>
+      <td class="txt">{{ nomes_regime.get(c.regime, c.regime) }}</td><td class="txt">{{ c.unidade }}</td><td>{{ c.quantidade|brl }}</td>
+      <td>{{ c.preco_unit|brl }}</td>
+      <td>{{ (c.creditos_atual / c.quantidade)|brl if c.quantidade else '—' }}</td>
+      <td>{{ (c.creditos_ano / c.quantidade)|brl if c.quantidade else '—' }}</td>
+      <td>{{ c.custo_unit_atual|brl }}</td><td><b>{{ c.custo_unit_ano|brl }}</b></td>
+      <td class="txt" title="Hoje {{ c.custo_unit_atual|brl }} · {{ ano }} {{ c.custo_unit_ano|brl }}">
+        <div class="barra atual" style="width:{{ ((c.custo_unit_atual or 0) / maior * 100)|round(1) }}%"></div>
+        <div class="barra" style="width:{{ ((c.custo_unit_ano or 0) / maior * 100)|round(1) }}%; margin-top:2px"></div></td>
+      <td>{{ var(c.variacao_custo_pct) }}</td><td>{{ var(c.preco_equilibrio_pct, inverso=true) }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+</div>
+{% endblock %}

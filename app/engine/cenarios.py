@@ -12,6 +12,7 @@ from decimal import Decimal
 
 from app.calculadora.client import AliquotaEfetiva, CalculadoraRTC, Chave
 from app.engine.premissas import TRANSICAO, Premissas
+from app.localidades import CODIGO_UF
 from app.parser.nfe import Documento, Item, Participante
 
 ZERO = Decimal("0")
@@ -75,13 +76,64 @@ class Analise:
     itens: list[ResultadoItem]
     alertas: list[str]
     ignorados: int
+    calculadora: dict = field(default_factory=dict)  # endereço e versão usados (rastreabilidade)
+    aliquotas_usadas: dict = field(default_factory=dict)  # ano -> {"aliquotas": {...}, "origens": {...}}
+
+    @property
+    def versao_calculadora(self) -> str:
+        c = self.calculadora
+        if not c:
+            return "não informada"
+        if c.get("erro"):
+            return f"indisponível ({c['erro'][:80]})"
+        return f"app {c['versao_app']} · base de regras {c['versao_base']} de {c['data_base']} · {c['url']}"
 
 
-def _classificar(item: Item, overrides: dict[str, tuple[str, str]]) -> Classificacao:
-    for chave in (item.codigo, item.ncm):
-        if chave in overrides:
-            cst, cct = overrides[chave]
-            return Classificacao(cst, cct, "manual")
+@dataclass
+class Classificacoes:
+    """Ajustes manuais de classificação, buscados nesta ordem: EAN, código do produto, NCM.
+
+    Chaves gravadas com prefixo ("ean:", "cod:", "ncm:"). Chaves sem prefixo são do formato antigo
+    (código ou NCM) e continuam valendo para os dois.
+    """
+    por_ean: dict[str, tuple[str, str]] = field(default_factory=dict)
+    por_codigo: dict[str, tuple[str, str]] = field(default_factory=dict)
+    por_ncm: dict[str, tuple[str, str]] = field(default_factory=dict)
+
+    @classmethod
+    def de(cls, ajustes: "dict[str, tuple[str, str]] | Classificacoes | None") -> "Classificacoes":
+        if isinstance(ajustes, Classificacoes):
+            return ajustes
+        c = cls()
+        for chave, valor in (ajustes or {}).items():
+            tipo, sep, resto = chave.partition(":")
+            if sep and tipo == "ean":
+                c.por_ean[resto] = valor
+            elif sep and tipo == "cod":
+                c.por_codigo[resto] = valor
+            elif sep and tipo == "ncm":
+                c.por_ncm[resto] = valor
+            else:
+                c.por_codigo.setdefault(chave, valor)
+                c.por_ncm.setdefault(chave, valor)
+        return c
+
+    def buscar(self, item: Item) -> tuple[tuple[str, str], str] | None:
+        """Retorna ((cst, cClassTrib), chave usada) ou None."""
+        if item.gtin and item.gtin in self.por_ean:
+            return self.por_ean[item.gtin], f"ean:{item.gtin}"
+        if item.codigo in self.por_codigo:
+            return self.por_codigo[item.codigo], f"cod:{item.codigo}"
+        if item.ncm in self.por_ncm:
+            return self.por_ncm[item.ncm], f"ncm:{item.ncm}"
+        return None
+
+
+def _classificar(item: Item, ajustes: Classificacoes) -> Classificacao:
+    achado = ajustes.buscar(item)
+    if achado:
+        (cst, cct), _ = achado
+        return Classificacao(cst, cct, "manual")
     if item.ibscbs and item.ibscbs.cclasstrib:
         return Classificacao(item.ibscbs.cst, item.ibscbs.cclasstrib, "xml")
     return Classificacao(*CLASSIFICACAO_PADRAO, "padrao")
@@ -117,8 +169,9 @@ def _tributos_reforma(i: Item, ano: int, aliq: AliquotaEfetiva) -> tuple[Decimal
 
 
 def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas,
-             calculadora: CalculadoraRTC, overrides: dict[str, tuple[str, str]] | None = None) -> Analise:
-    overrides = overrides or {}
+             calculadora: CalculadoraRTC,
+             overrides: "dict[str, tuple[str, str]] | Classificacoes | None" = None) -> Analise:
+    overrides = Classificacoes.de(overrides)
     alertas: list[str] = []
     ignorados = 0
     pendentes: list[tuple[str, Documento, Item, Participante, Classificacao]] = []
@@ -136,7 +189,10 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
             pendentes.append((direcao, doc, item, contraparte, _classificar(item, overrides)))
 
     chaves = {Chave(it.ncm, c.cst, c.cclasstrib, ano) for _, _, it, _, c in pendentes for ano in premissas.anos}
-    nominais = {ano: premissas.aliquotas_nominais(ano) for ano in premissas.anos}
+    nominais, origens = {}, {}
+    for ano in premissas.anos:
+        nominais[ano], origens[ano] = premissas.aliquotas_do_ano(ano, calculadora, CODIGO_UF.get(empresa.uf),
+                                                                 empresa.cod_municipio)
     aliquotas = calculadora.aliquotas(chaves, nominais, empresa.uf, empresa.cod_municipio) if chaves else {}
 
     resultados = []
@@ -186,7 +242,13 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
         resultados.append(r)
 
     _alertas_gerais(resultados, empresa, alertas, ignorados)
-    return Analise(empresa, premissas, resultados, alertas, ignorados)
+    ident = calculadora.identificacao() if hasattr(calculadora, "identificacao") else {}
+    usadas = {ano: {"aliquotas": nominais[ano], "origens": origens[ano]} for ano in premissas.anos}
+    if any(o != "oficial" for u in usadas.values() for o in u["origens"].values()):
+        alertas.append("Alíquotas de CBS/IBS de 2027 em diante ainda não publicadas na base oficial da calculadora: "
+                       "usadas as alíquotas de referência das premissas. Quando a Receita publicar, as oficiais passam "
+                       "a ser usadas automaticamente.")
+    return Analise(empresa, premissas, resultados, alertas, ignorados, ident, usadas)
 
 
 def _alertas_gerais(resultados: list[ResultadoItem], empresa: Empresa, alertas: list[str], ignorados: int):
