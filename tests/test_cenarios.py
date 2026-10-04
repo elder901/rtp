@@ -36,6 +36,12 @@ def test_entrada_fornecedor_normal_lucro_real(analise):
     assert v.custo_ou_receita(r.item.valor_liquido) == D("744.15")
 
 
+def test_sem_credito_de_pis_cofins_em_compra_com_aliquota_zero(analise):
+    arroz = _item(analise, "ARZ-5")               # PIS/COFINS CST 06 (alíquota zero) no fornecedor
+    assert arroz.item.pis_cst == "06"
+    assert arroz.atual.creditos == D("35.00")      # só o ICMS
+
+
 def test_transicao_2027_mantem_icms(analise):
     v = _item(analise, "NB-01").anos[2027]
     assert v.cbs == (D("744.15") * D("8.7") / 100).quantize(D("0.01"))  # CBS - 0,1 p.p.

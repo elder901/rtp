@@ -20,6 +20,16 @@ class Settings(BaseSettings):
     # Limite de consultas por chave (XML completo após Ciência) em cada sincronização.
     dfe_max_consultas_chave: int = 10
 
+    # API de apuração da CBS (Receita Integra, OAuth2 client credentials).
+    apuracao_token_url: str = "https://api.receitafederal.gov.br/token"
+    apuracao_url_prr: str = "https://api.receitafederal.gov.br/apuracao-cbs-prr/v2"
+    apuracao_url_pro: str = "https://api.receitafederal.gov.br/apuracao-cbs/v2"
+    apuracao_limite_diario: int = 4      # por endpoint (débitos, créditos), definido pela Receita
+    apuracao_timeout: float = 60.0
+    # Endereço HTTPS público deste servidor: a Receita valida e chama o webhook nele.
+    # Ex.: https://rtp.bixdata.com.br   (sem ele, use a importação manual do JSON)
+    url_publica: str = ""
+
     # Proteção mínima da interface web até a fase 4 (login multi-cliente). Vazio = sem senha.
     usuario: str = ""
     senha: str = ""

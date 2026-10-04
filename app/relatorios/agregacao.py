@@ -45,18 +45,37 @@ def resumo(a: Analise) -> list[dict]:
     return linhas
 
 
+def _custos_por_gtin(a: Analise) -> dict[tuple[str, str], dict]:
+    """Custo efetivo unitário de compra (após créditos) por (GTIN, unidade), no cenário atual e em cada ano."""
+    grupos: dict[tuple[str, str], list[ResultadoItem]] = defaultdict(list)
+    for r in a.itens:
+        if r.direcao == "entrada" and r.item.gtin and r.item.quantidade:
+            grupos[(r.item.gtin, r.item.unidade.upper())].append(r)
+    custos = {}
+    for k, rs in grupos.items():
+        qtd = sum((r.item.quantidade for r in rs), ZERO)
+        c = {"atual": sum((r.atual.custo_ou_receita(r.item.valor_liquido) for r in rs), ZERO) / qtd}
+        for ano in a.premissas.anos:
+            c[ano] = sum((r.anos[ano].custo_ou_receita(r.item.valor_liquido) for r in rs), ZERO) / qtd
+        custos[k] = {kk: v.quantize(Decimal("0.0001")) for kk, v in c.items()}
+    return custos
+
+
 def por_produto(a: Analise) -> list[dict]:
     grupos: dict[str, list[ResultadoItem]] = defaultdict(list)
     for r in a.itens:
         if r.direcao == "saida":
             grupos[r.item.codigo].append(r)
+    custos = _custos_por_gtin(a)
     linhas = []
     for codigo, rs in grupos.items():
         i0 = rs[0]
         vl = sum((r.item.valor_liquido for r in rs), ZERO)
         trib_atual = sum((r.atual.tributos for r in rs), ZERO)
+        qtd = sum((r.item.quantidade for r in rs), ZERO)
+        custo = custos.get((i0.item.gtin, i0.item.unidade.upper())) if i0.item.gtin else None
         linha = {
-            "codigo": codigo, "descricao": i0.item.descricao, "ncm": i0.item.ncm,
+            "codigo": codigo, "descricao": i0.item.descricao, "ncm": i0.item.ncm, "gtin": i0.item.gtin,
             "cst": i0.classificacao.cst, "cclasstrib": i0.classificacao.cclasstrib,
             "origem_classificacao": i0.classificacao.origem,
             "quantidade": sum((r.item.quantidade for r in rs), ZERO),
@@ -67,6 +86,18 @@ def por_produto(a: Analise) -> list[dict]:
             linha[f"tributos_{ano}"] = t
             linha[f"carga_{ano}_pct"] = _pct(t, vl)
             linha[f"var_preco_{ano}_pct"] = _var(vl + t, vl + trib_atual)
+        # Preço neutro com margem: mantém a margem unitária em R$ (valor líquido - custo efetivo de compra),
+        # repassando a mudança do custo após créditos e a nova carga sobre a venda.
+        linha["custo_unit_atual"] = custo["atual"] if custo else None
+        linha["margem_unit"] = (vl / qtd - custo["atual"]).quantize(Decimal("0.01")) if custo and qtd else None
+        for ano in a.premissas.anos:
+            if custo and qtd and vl:
+                carga_atual, carga = trib_atual / vl, linha[f"tributos_{ano}"] / vl
+                preco_atual = vl / qtd * (1 + carga_atual)
+                neutro = (custo[ano] + linha["margem_unit"]) * (1 + carga)
+                linha[f"preco_neutro_{ano}_pct"] = _var(neutro, preco_atual)
+            else:
+                linha[f"preco_neutro_{ano}_pct"] = None
         linhas.append(linha)
     ultimo = a.premissas.anos[-1]
     return sorted(linhas, key=lambda l: -(l[f"tributos_{ultimo}"] - l["tributos_atual"]))

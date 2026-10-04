@@ -1,0 +1,16 @@
+{
+  "tiqueteSolicitacao": "exemplo-debitos",
+  "ni": "11222333",
+  "niConsumidor": "",
+  "geradoEm": "2026-03-31T12:00:00Z",
+  "apuracao": [
+    {
+      "pa": "03/2026",
+      "debitos": [
+        {"origem": 0, "documento": 55, "chave": "35261011222333000181550010000000101000000101",
+         "emissao": "2026-03-20T18:00:00Z", "registro": "2026-03-20T18:01:00Z", "atualizacao": "2026-03-20T18:01:00Z",
+         "cbs": {"apurado": 17.25, "excedente": 0, "inexigivel": 0, "suspenso": 0, "extinto": 0, "saldoDevedor": 17.25}}
+      ]
+    }
+  ]
+}

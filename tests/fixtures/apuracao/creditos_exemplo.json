@@ -1,0 +1,18 @@
+{
+  "tiqueteSolicitacao": "exemplo-creditos",
+  "ni": "11222333",
+  "geradoEm": "2026-03-31T12:00:00Z",
+  "apuracao": [
+    {
+      "pa": "03/2026",
+      "creditos": [
+        {"origem": 0, "documento": 55, "chave": "35261044555666000177550010000012341000012345",
+         "emissao": "2026-03-10T13:00:00Z", "registro": "2026-03-10T13:05:00Z", "atualizacao": "2026-03-10T13:05:00Z",
+         "cbs": {"apurado": 6.70, "excedentes": 0, "apropriacao": {"aApropriar": 6.70}}},
+        {"origem": 0, "documento": 55, "chave": "35261055666777000188550010000009991000099999",
+         "emissao": "2026-03-15T13:00:00Z", "registro": "2026-03-15T13:05:00Z", "atualizacao": "2026-03-15T13:05:00Z",
+         "cbs": {"apurado": 2.43, "excedentes": 0}}
+      ]
+    }
+  ]
+}

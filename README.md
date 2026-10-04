@@ -18,7 +18,8 @@ Interface web (http://localhost:8000):
 ```
 
 Fluxo: cadastrar empresa → enviar certificado A1 e **Sincronizar** (entradas pela SEFAZ) e/ou **Importar XMLs**
-(saídas e o que faltar) → revisar a aba **Classificação** → aba **Análise** (painel e Excel).
+(saídas e o que faltar) → revisar a aba **Classificação** → aba **Análise** (painel e Excel) → aba **Apuração
+Receita** (conciliação com a apuração assistida da CBS).
 
 Linha de comando (mesmas operações; `dfe` serve para o Agendador de Tarefas do Windows):
 
@@ -28,6 +29,13 @@ Linha de comando (mesmas operações; `dfe` serve para o Agendador de Tarefas do
 .venv/Scripts/python -m app.cli certificado --cnpj 11222333000181 --pfx C:/certs/loja.pfx
 .venv/Scripts/python -m app.cli dfe
 .venv/Scripts/python -m app.cli relatorio --cnpj 11222333000181 --inicio 2026-01-01 --fim 2026-06-30 --saida relatorios/loja.xlsx
+```
+
+Apuração assistida (`apuracao credencial | solicitar | verificar | importar | conciliar`):
+
+```bash
+.venv/Scripts/python -m app.cli apuracao importar --cnpj 11222333000181 --arquivo debitos.json
+.venv/Scripts/python -m app.cli apuracao conciliar --cnpj 11222333000181 --pa-inicio 2026-03 --saida relatorios/conciliacao.xlsx
 ```
 
 `analisar` continua disponível para uma análise avulsa de pasta/ZIP, sem gravar nada.
@@ -59,6 +67,39 @@ Configurações em variáveis de ambiente ou `.env` — veja `.env.example`.
 - O servidor escuta só em `127.0.0.1`. Antes de expô-lo na rede, defina `RTP_USUARIO`/`RTP_SENHA` (login básico) e
   use HTTPS. Login por usuário e isolamento por cliente são a fase 4.
 
+## Apuração assistida da CBS (API da Receita)
+
+Documentação oficial: https://docs.receitafederal.gov.br/apuracao-cbs/ — `app/apuracao/`.
+
+- Credencial: Client ID/Secret gerados no portal RTC ("Gerar Credencial para API"), guardados cifrados. Token
+  OAuth2 (client credentials) em `api.receitafederal.gov.br/token`. Ambientes: produção restrita (piloto) e produção.
+- A API é **assíncrona**: `POST /debitos|creditos/{cnpj base}` com uma `urlRetorno`; a Receita **testa essa URL com
+  HEAD e só aceita se for HTTPS público**, processa (até 4 h) e chama o webhook com uma URL assinada (48 h) para baixar
+  o JSON. O sistema expõe o webhook em `/webhooks/apuracao-cbs/{token}` (token aleatório por solicitação, fora do
+  login básico) e usa `GET /situacao/{tíquete}` como plano B ("Verificar solicitações em aberto" ou o agendador).
+  A URL assinada é tratada como segredo: nunca vai para banco ou log.
+- Para solicitar direto da Receita, publique o servidor com HTTPS e defina `RTP_URL_PUBLICA`. Sem isso, **importe
+  o arquivo JSON** (mesmo formato; exemplos em `tests/fixtures/apuracao/`).
+- Limite da Receita: 4 solicitações por dia de cada tipo (controlado antes de chamar). Consultas são incrementais:
+  a primeira traz o mês corrente; as seguintes, o que mudou (janela de 8 dias). Os registros são atualizados, não
+  duplicados.
+- **Conciliação** nota a nota: CBS destacada nos XMLs (saídas × débitos; entradas × créditos) contra a apurada pela
+  Receita (origem NORMAL; devoluções, cancelamentos e afins aparecem como ajustes). Situações: valor divergente,
+  só na Receita (falta o XML na base), cancelada na base, só no XML (ainda não apurada) e confere.
+
+## Simples Nacional × CBS/IBS pelo regime regular
+
+Para empresas do Simples, o painel compara, ano a ano, permanecer no **Simples puro** com **recolher CBS/IBS pelo
+regime regular** (LC 214/2025): o DAS perde a parcela que CBS/IBS substituem (PIS+COFINS e, conforme a transição,
+ICMS/ISS — percentuais do DAS editáveis, padrão Anexo I 1ª faixa), e a empresa passa a ter débitos e créditos de
+CBS/IBS. Mostra também o crédito que cada opção transfere aos clientes PJ, que pesa na competitividade.
+
+## Preço neutro com margem
+
+Além do **Δ preço** (receita líquida constante), o painel calcula o **preço neutro**: mantém a margem unitária em R$,
+repassando a mudança do custo de compra após créditos. Compra e venda do mesmo produto são ligadas pelo **GTIN**
+(cEAN) com a mesma unidade; produtos sem GTIN ficam só com o Δ preço.
+
 ## Calculadora RTC
 
 - Padrão: instância pública da Receita. Só são enviados NCM, CST, cClassTrib, base fictícia de R$ 1.000 e as
@@ -84,7 +125,8 @@ CST e se aplica ao NCM). Exportação/importação em CSV `codigo_ou_ncm;cst;ccl
   sobre ele aplicam-se os tributos atuais e os da reforma.
 - **Saídas**: Δ preço = quanto o preço ao cliente muda para manter a mesma receita líquida.
 - **Entradas**: custo efetivo = preço pago − créditos aproveitáveis.
-  - Hoje: Real credita ICMS + PIS/COFINS 9,25% (base sem ICMS); Presumido credita ICMS; Simples não credita.
+  - Hoje: Real credita ICMS + PIS/COFINS 9,25% (base sem ICMS; sem crédito quando a compra não sofreu a
+    contribuição — CST 04 a 09 do fornecedor); Presumido credita ICMS; Simples não credita.
     Fornecedor do Simples: ICMS só pelo `vCredICMSSN`.
   - Reforma: crédito amplo de CBS/IBS para Real e Presumido (ambos passam ao regime regular). Fornecedor do
     Simples gera crédito só da parcela de CBS/IBS do DAS (premissa editável, padrão 4%).
@@ -98,12 +140,14 @@ CST e se aplica ao NCM). Exportação/importação em CSV `codigo_ou_ncm;cst;ccl
 - Não identifica uso e consumo / ativo imobilizado: todo crédito de entrada é tratado como aproveitável.
 - Não trata Imposto Seletivo, monofasia (combustíveis), ZFM nem PIS/COFINS monofásico — itens sinalizados quando
   identificáveis.
-- Empresas do Simples: saídas pelo DAS efetivo informado; a simulação "Simples × regime regular" é a fase 3.
+- Empresas do Simples: o DAS efetivo e sua repartição são premissas informadas (não há XML do DAS).
+- Preço neutro depende de GTIN e unidade iguais na compra e na venda; caixa × unidade não é convertida.
+- A API de apuração foi implementada pela documentação oficial e testada com respostas simuladas; a primeira
+  solicitação real deve ser feita em produção restrita (piloto).
 - Só NF-e/NFC-e. CT-e e NFS-e entram depois.
 - A distribuição DF-e foi testada com respostas simuladas da SEFAZ; a primeira execução real com um certificado
   de cliente deve ser acompanhada (de preferência começando em homologação).
 
 ## Próximas fases
 
-3. Conciliação com a API da Apuração Assistida, simulação Simples × regular, preço neutro com margem.
 4. Multi-cliente (PostgreSQL com isolamento por empresa, login por usuário, cobrança).

@@ -66,16 +66,42 @@
   </table></div>
 </div>
 
+{% if simples %}
+<div class="card">
+  <h2>Simples Nacional: permanecer no Simples × recolher CBS/IBS pelo regime regular</h2>
+  <p class="suave" style="margin-top:-8px">No regime regular o DAS perde a parcela substituída por CBS/IBS
+    (PIS+COFINS {{ a.premissas.das_pis_cofins_pct|pct }} e ICMS/ISS {{ a.premissas.das_icms_iss_pct|pct }} do DAS, conforme
+    a transição); em troca a empresa apura débitos e créditos e o cliente PJ credita o valor cheio.</p>
+  <div class="tabela"><table>
+    <tr><th class="txt">Ano</th><th>Simples puro (DAS)</th><th>Crédito ao cliente PJ</th>
+        <th>Regular: DAS reduzido</th><th>+ débitos CBS/IBS</th><th>− créditos</th><th>Regular: carga</th>
+        <th>Crédito ao cliente PJ</th><th>Diferença</th><th class="txt">Menor carga</th></tr>
+    {% for l in simples %}
+    <tr><td>{{ l.ano }}</td><td>{{ l.simples_carga|brl }}</td><td>{{ l.simples_credito_clientes_pj|brl }}</td>
+        <td>{{ l.hibrido_das|brl }}</td><td>{{ l.hibrido_debitos|brl }}</td><td>{{ l.hibrido_creditos|brl }}</td>
+        <td><b>{{ l.hibrido_carga|brl }}</b></td><td>{{ l.hibrido_credito_clientes_pj|brl }}</td>
+        <td>{% if l.diferenca > 0 %}<span class="sobe">+{{ l.diferenca|brl }}</span>{% else %}<span class="desce">{{ l.diferenca|brl }}</span>{% endif %}</td>
+        <td class="txt">{{ l.melhor }}</td></tr>
+    {% endfor %}
+  </table></div>
+  <p class="suave">Carga menor não é o único critério: se a maior parte das vendas for para empresas, o crédito
+    integral que o regime regular transfere ao cliente pode valer mais do que a diferença de carga.</p>
+</div>
+{% endif %}
+
 <div class="card">
   <h2>Por produto (saídas) — variação de preço para manter a receita líquida</h2>
+  <p class="suave" style="margin-top:-8px"><b>Δ preço</b>: mantém a receita líquida. <b>Preço neutro</b>: mantém a
+    margem em R$, repassando também a mudança do custo de compra após créditos (produtos com GTIN e mesma unidade
+    na compra e na venda).</p>
   <div class="tabela"><table>
     <tr><th class="txt">Produto</th><th class="txt">NCM</th><th class="txt">cClassTrib</th><th>Valor líquido</th>
-        <th>Carga atual</th>{% for ano in anos %}<th>Carga {{ ano }}</th><th>Δ preço {{ ano }}</th>{% endfor %}</tr>
+        <th>Carga atual</th>{% for ano in anos %}<th>Carga {{ ano }}</th><th>Δ preço {{ ano }}</th><th>Preço neutro {{ ano }}</th>{% endfor %}</tr>
     {% for p in produtos %}
     <tr><td class="txt quebra">{{ p.codigo }} · {{ p.descricao }}</td><td class="txt">{{ p.ncm }}</td>
         <td class="txt">{{ p.cclasstrib }} <span class="tag {{ p.origem_classificacao }}">{{ p.origem_classificacao }}</span></td>
         <td>{{ p.valor_liquido|brl }}</td><td>{{ p.carga_atual_pct|pct }}</td>
-        {% for ano in anos %}<td>{{ p['carga_%s_pct'|format(ano)]|pct }}</td><td>{{ var(p['var_preco_%s_pct'|format(ano)]) }}</td>{% endfor %}</tr>
+        {% for ano in anos %}<td>{{ p['carga_%s_pct'|format(ano)]|pct }}</td><td>{{ var(p['var_preco_%s_pct'|format(ano)]) }}</td><td>{{ var(p['preco_neutro_%s_pct'|format(ano)]) }}</td>{% endfor %}</tr>
     {% else %}<tr><td colspan="9" class="txt suave">Nenhuma saída no período.</td></tr>{% endfor %}
   </table></div>
 </div>

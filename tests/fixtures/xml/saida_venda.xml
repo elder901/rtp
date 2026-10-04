@@ -3,14 +3,14 @@
 <ide><cUF>35</cUF><mod>55</mod><serie>1</serie><nNF>10</nNF><dhEmi>2026-03-20T15:00:00-03:00</dhEmi><tpNF>1</tpNF></ide>
 <emit><CNPJ>11222333000181</CNPJ><xNome>LOJA TESTE LTDA</xNome><enderEmit><cMun>3550308</cMun><UF>SP</UF></enderEmit><CRT>3</CRT></emit>
 <dest><CNPJ>22333444000166</CNPJ><xNome>CLIENTE CORPORATIVO SA</xNome><enderDest><cMun>3304557</cMun><UF>RJ</UF></enderDest></dest>
-<det nItem="1"><prod><cProd>V-NB01</cProd><xProd>NOTEBOOK 15 POL</xProd><NCM>84713012</NCM><CFOP>6102</CFOP><uCom>UN</uCom><qCom>1.0000</qCom><vProd>1500.00</vProd></prod>
+<det nItem="1"><prod><cProd>V-NB01</cProd><cEAN>7890000000017</cEAN><xProd>NOTEBOOK 15 POL</xProd><NCM>84713012</NCM><CFOP>6102</CFOP><uCom>UN</uCom><qCom>1.0000</qCom><vProd>1500.00</vProd></prod>
 <imposto><ICMS><ICMS00><orig>0</orig><CST>00</CST><vBC>1500.00</vBC><pICMS>12.00</pICMS><vICMS>180.00</vICMS></ICMS00></ICMS>
 <PIS><PISAliq><CST>01</CST><vBC>1320.00</vBC><pPIS>1.65</pPIS><vPIS>21.78</vPIS></PISAliq></PIS>
 <COFINS><COFINSAliq><CST>01</CST><vBC>1320.00</vBC><pCOFINS>7.60</pCOFINS><vCOFINS>100.32</vCOFINS></COFINSAliq></COFINS></imposto></det>
-<det nItem="2"><prod><cProd>V-ARZ5</cProd><xProd>ARROZ TIPO 1 5KG</xProd><NCM>10063021</NCM><CFOP>6102</CFOP><uCom>FD</uCom><qCom>20.0000</qCom><vProd>700.00</vProd></prod>
+<det nItem="2"><prod><cProd>V-ARZ5</cProd><cEAN>7890000000024</cEAN><xProd>ARROZ TIPO 1 5KG</xProd><NCM>10063021</NCM><CFOP>6102</CFOP><uCom>FD</uCom><qCom>20.0000</qCom><vProd>700.00</vProd></prod>
 <imposto><ICMS><ICMS00><orig>0</orig><CST>00</CST><vBC>700.00</vBC><pICMS>7.00</pICMS><vICMS>49.00</vICMS></ICMS00></ICMS>
 <PIS><PISAliq><CST>06</CST><vBC>0.00</vBC><pPIS>0.00</pPIS><vPIS>0.00</vPIS></PISAliq></PIS>
 <COFINS><COFINSAliq><CST>06</CST><vBC>0.00</vBC><pCOFINS>0.00</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSAliq></COFINS></imposto></det>
-<det nItem="3"><prod><cProd>BRINDE</cProd><xProd>CANECA BRINDE</xProd><NCM>69120000</NCM><CFOP>6910</CFOP><uCom>UN</uCom><qCom>1.0000</qCom><vProd>10.00</vProd></prod>
+<det nItem="3"><prod><cProd>BRINDE</cProd><cEAN>SEM GTIN</cEAN><xProd>CANECA BRINDE</xProd><NCM>69120000</NCM><CFOP>6910</CFOP><uCom>UN</uCom><qCom>1.0000</qCom><vProd>10.00</vProd></prod>
 <imposto><ICMS><ICMS00><orig>0</orig><CST>00</CST><vBC>10.00</vBC><pICMS>12.00</pICMS><vICMS>1.20</vICMS></ICMS00></ICMS></imposto></det>
 </infNFe></NFe></nfeProc>

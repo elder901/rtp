@@ -19,7 +19,7 @@ from app.parser.nfe import Documento, ler_nfe
 from app.seguranca import cifrar, decifrar
 
 CAMPOS_PREMISSAS = ["cbs_referencia", "ibs_uf_referencia", "ibs_mun_referencia", "credito_fornecedor_simples_pct",
-                    "credito_fornecedor_mei_pct", "aliquota_das_pct"]
+                    "credito_fornecedor_mei_pct", "aliquota_das_pct", "das_pis_cofins_pct", "das_icms_iss_pct"]
 
 
 def so_digitos(s: str) -> str:
@@ -180,7 +180,22 @@ def salvar_classificacao(s: Session, e: models.Empresa, chave: str, cst: str, cc
 
 
 def montar_analise(s: Session, e: models.Empresa, calculadora: CalculadoraRTC, inicio: date | None = None,
-                   fim: date | None = None, anos: list[int] | None = None) -> Analise:
-    return analisar(empresa_do_motor(e), documentos(s, e, inicio, fim), premissas_da_empresa(e, anos),
-                    calculadora, classificacoes(s, e))
+                   fim: date | None = None, anos: list[int] | None = None,
+                   docs: list[Documento] | None = None, regime: str | None = None) -> Analise:
+    """`regime` permite simular a mesma base em outro regime (ex.: Simples optando por CBS/IBS regular)."""
+    empresa = empresa_do_motor(e)
+    if regime:
+        empresa.regime = regime
+    return analisar(empresa, docs if docs is not None else documentos(s, e, inicio, fim),
+                    premissas_da_empresa(e, anos), calculadora, classificacoes(s, e))
+
+
+def comparar_simples(s: Session, e: models.Empresa, calculadora: CalculadoraRTC, a_simples: Analise,
+                     inicio: date | None = None, fim: date | None = None) -> list[dict]:
+    from app.engine import simples
+
+    a_regular = montar_analise(s, e, calculadora, inicio, fim, a_simples.premissas.anos,
+                               docs=list({r.documento.chave: r.documento for r in a_simples.itens}.values()),
+                               regime="presumido")
+    return simples.comparar(a_simples, a_regular)
 

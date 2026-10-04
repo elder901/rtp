@@ -46,6 +46,9 @@ class Premissas:
     credito_fornecedor_mei_pct: Decimal = D("0")
     # Alíquota efetiva do DAS da empresa analisada (só para empresas do Simples).
     aliquota_das_pct: Decimal = D("6.0")
+    # Repartição do DAS (% do DAS): parcelas que CBS e IBS substituem. Padrão: Anexo I (comércio), 1ª faixa.
+    das_pis_cofins_pct: Decimal = D("15.50")
+    das_icms_iss_pct: Decimal = D("34.00")
     # Empresa industrial credita IPI hoje.
     industria: bool = False
     anos: list[int] = field(default_factory=lambda: list(TRANSICAO))

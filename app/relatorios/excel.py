@@ -40,7 +40,7 @@ def _aba(wb: Workbook, titulo: str, linhas: list[dict]):
     ws.auto_filter.ref = ws.dimensions
 
 
-def exportar(a: Analise, destino: Path | BinaryIO) -> Path | BinaryIO:
+def exportar(a: Analise, destino: Path | BinaryIO, extras: dict[str, list[dict]] | None = None) -> Path | BinaryIO:
     wb = Workbook()
     wb.remove(wb.active)
     _aba(wb, "Resumo", agregacao.resumo(a))
@@ -49,6 +49,8 @@ def exportar(a: Analise, destino: Path | BinaryIO) -> Path | BinaryIO:
     _aba(wb, "Classificação", agregacao.classificacao(a))
     _aba(wb, "Itens", agregacao.itens(a))
     _aba(wb, "Premissas", agregacao.premissas(a))
+    for titulo, linhas in (extras or {}).items():
+        _aba(wb, titulo, linhas)
     _aba(wb, "Alertas", [{"alerta": t} for t in a.alertas] or [{"alerta": "Nenhum"}])
     if isinstance(destino, Path):
         destino.parent.mkdir(parents=True, exist_ok=True)

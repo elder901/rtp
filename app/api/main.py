@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import json
 import logging
 import secrets
 from contextlib import asynccontextmanager
@@ -26,6 +27,9 @@ from sqlalchemy import func, select
 from app import classificacao as classif
 from app import db, models, servicos
 from app.api.grafico import linha_do_tempo
+from app.apuracao import conciliacao
+from app.apuracao import servico as apuracao
+from app.apuracao.cliente import ErroApuracao
 from app.calculadora.client import CalculadoraRTC, ErroCalculadora
 from app.config import settings
 from app.dfe.certificado import CertificadoInvalido
@@ -39,12 +43,22 @@ calculadora = CalculadoraRTC()
 AVISOS: dict[int, list[str]] = {}  # mensagens exibidas uma vez na página da empresa
 
 
+def _verificar_apuracoes():
+    with db.sessao() as s:
+        ids = set(s.scalars(select(models.SolicitacaoApuracao.empresa_id)
+                            .where(models.SolicitacaoApuracao.estado.in_(apuracao.ABERTAS))))
+    for id_ in ids:
+        with db.sessao() as s:
+            apuracao.verificar_pendentes(s, s.get(models.Empresa, id_))
+
+
 async def _agendador():
     while True:
-        try:
-            await asyncio.to_thread(sincronizar_pendentes, db.sessao)
-        except Exception:  # noqa: BLE001 — o agendador não pode morrer
-            log.exception("Falha na sincronização DF-e agendada")
+        for nome, tarefa in (("DF-e", lambda: sincronizar_pendentes(db.sessao)), ("apuração", _verificar_apuracoes)):
+            try:
+                await asyncio.to_thread(tarefa)
+            except Exception:  # noqa: BLE001 — o agendador não pode morrer
+                log.exception("Falha na tarefa agendada de %s", nome)
         await asyncio.sleep(settings.dfe_intervalo_minutos * 60)
 
 
@@ -60,8 +74,8 @@ async def ciclo_de_vida(_app: FastAPI):
 _basic = HTTPBasic(auto_error=False)
 
 
-def autenticar(cred: HTTPBasicCredentials | None = Depends(_basic)):
-    if not settings.usuario:
+def autenticar(request: Request, cred: HTTPBasicCredentials | None = Depends(_basic)):
+    if not settings.usuario or request.url.path.startswith("/webhooks/"):
         return
     ok = cred and secrets.compare_digest(cred.username, settings.usuario) and \
         secrets.compare_digest(cred.password, settings.senha)
@@ -152,7 +166,8 @@ def salvar_dados(empresa_id: int, regime: str = Form(...), uf: str = Form(...), 
                  industria: bool = Form(False), manifestar_ciencia: bool = Form(False), ambiente_dfe: int = Form(1),
                  cbs_referencia: str = Form(""), ibs_uf_referencia: str = Form(""), ibs_mun_referencia: str = Form(""),
                  credito_fornecedor_simples_pct: str = Form(""), credito_fornecedor_mei_pct: str = Form(""),
-                 aliquota_das_pct: str = Form("")):
+                 aliquota_das_pct: str = Form(""), das_pis_cofins_pct: str = Form(""),
+                 das_icms_iss_pct: str = Form("")):
     if regime not in ("real", "presumido", "simples") or ambiente_dfe not in (1, 2):
         raise HTTPException(422, "Regime ou ambiente inválido")
     with db.sessao() as s:
@@ -163,7 +178,8 @@ def salvar_dados(empresa_id: int, regime: str = Form(...), uf: str = Form(...), 
             servicos.atualizar_premissas(e, dict(
                 cbs_referencia=cbs_referencia, ibs_uf_referencia=ibs_uf_referencia,
                 ibs_mun_referencia=ibs_mun_referencia, credito_fornecedor_simples_pct=credito_fornecedor_simples_pct,
-                credito_fornecedor_mei_pct=credito_fornecedor_mei_pct, aliquota_das_pct=aliquota_das_pct))
+                credito_fornecedor_mei_pct=credito_fornecedor_mei_pct, aliquota_das_pct=aliquota_das_pct,
+                das_pis_cofins_pct=das_pis_cofins_pct, das_icms_iss_pct=das_icms_iss_pct))
         except InvalidOperation:
             raise HTTPException(422, "Premissa com valor inválido")
     _avisar(empresa_id, "Dados e premissas salvos.")
@@ -297,6 +313,13 @@ def _periodo(inicio: str | None, fim: str | None) -> tuple[date | None, date | N
         raise HTTPException(422, "Data inválida (use AAAA-MM-DD)")
 
 
+def _comparar_simples(empresa_id: int, e: models.Empresa, a, inicio: date | None, fim: date | None):
+    if e.regime != "simples" or not a.itens:
+        return None
+    with db.sessao() as s:
+        return servicos.comparar_simples(s, s.get(models.Empresa, empresa_id), calculadora, a, inicio, fim)
+
+
 def _analise(empresa_id: int, inicio: date | None, fim: date | None):
     with db.sessao() as s:
         e = _carregar(s, empresa_id)
@@ -310,7 +333,8 @@ async def painel(request: Request, empresa_id: int, inicio: str | None = None, f
     e, a = await run_in_threadpool(_analise, empresa_id, di, df)
     destaque = [int(x) for x in anos.split(",") if x.strip().isdigit() and int(x) in a.premissas.anos] or a.premissas.anos[-1:]
     resumo = agregacao.resumo(a)
-    return _render(request, "painel.html", e=e, a=a, aba="analise", resumo=resumo,
+    simples = await run_in_threadpool(_comparar_simples, empresa_id, e, a, di, df)
+    return _render(request, "painel.html", e=e, a=a, aba="analise", resumo=resumo, simples=simples,
                    grafico=linha_do_tempo(resumo) if a.itens else None, anos=destaque,
                    produtos=agregacao.por_produto(a)[:100], fornecedores=agregacao.por_fornecedor(a)[:100],
                    inicio=inicio or "", fim=fim or "", anos_texto=",".join(map(str, destaque)))
@@ -320,11 +344,111 @@ async def painel(request: Request, empresa_id: int, inicio: str | None = None, f
 async def baixar_excel(empresa_id: int, inicio: str | None = None, fim: str | None = None):
     di, df = _periodo(inicio, fim)
     e, a = await run_in_threadpool(_analise, empresa_id, di, df)
+    simples = await run_in_threadpool(_comparar_simples, empresa_id, e, a, di, df)
     buffer = io.BytesIO()
-    exportar(a, buffer)
+    exportar(a, buffer, {"Simples x regular": simples} if simples else None)
     return Response(buffer.getvalue(),
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="reforma_{e.cnpj}.xlsx"'})
+
+
+# --- Apuração assistida (API da Receita) -------------------------------------------------------------------------
+
+@app.get("/empresas/{empresa_id}/apuracao", response_class=HTMLResponse)
+def tela_apuracao(request: Request, empresa_id: int, pa_inicio: str = "", pa_fim: str = ""):
+    with db.sessao() as s:
+        e = _carregar(s, empresa_id)
+        solicitacoes = list(s.scalars(select(models.SolicitacaoApuracao)
+                                      .where(models.SolicitacaoApuracao.empresa_id == e.id)
+                                      .order_by(models.SolicitacaoApuracao.criado_em.desc()).limit(20)))
+        conc = conciliacao.conciliar(s, e, pa_inicio or None, pa_fim or None)
+        return _render(request, "apuracao.html", e=e, aba="apuracao", credencial=apuracao.credencial(s, e),
+                       solicitacoes=solicitacoes,
+                       uso={t: apuracao.solicitacoes_hoje(s, e, t) for t in ("debitos", "creditos")},
+                       limite=settings.apuracao_limite_diario, url_publica=settings.url_publica,
+                       resumo=conc.resumo(), linhas=conc.linhas[:500], total_linhas=len(conc.linhas),
+                       pa_inicio=pa_inicio, pa_fim=pa_fim, avisos=AVISOS.pop(e.id, []))
+
+
+@app.post("/empresas/{empresa_id}/apuracao/credencial")
+def salvar_credencial_apuracao(empresa_id: int, client_id: str = Form(...), client_secret: str = Form(...),
+                               ambiente: str = Form("prr")):
+    with db.sessao() as s:
+        try:
+            apuracao.salvar_credencial(s, _carregar(s, empresa_id), client_id, client_secret, ambiente)
+            _avisar(empresa_id, "Credencial da API de apuração gravada (cifrada).")
+        except ValueError as erro:
+            _avisar(empresa_id, str(erro))
+    return _ir(empresa_id, "/apuracao")
+
+
+@app.post("/empresas/{empresa_id}/apuracao/solicitar")
+async def solicitar_apuracao(empresa_id: int, tipo: str = Form(...)):
+    def executar():
+        with db.sessao() as s:
+            sol = apuracao.solicitar(s, _carregar(s, empresa_id), tipo)
+            return sol.estado, sol.mensagem
+    try:
+        estado, mensagem = await run_in_threadpool(executar)
+        _avisar(empresa_id, f"Solicitação de {tipo}: {estado}. {mensagem}".strip())
+    except (ErroApuracao, ValueError) as erro:
+        _avisar(empresa_id, str(erro))
+    return _ir(empresa_id, "/apuracao")
+
+
+@app.post("/empresas/{empresa_id}/apuracao/verificar")
+async def verificar_apuracao(empresa_id: int):
+    def executar():
+        with db.sessao() as s:
+            return apuracao.verificar_pendentes(s, _carregar(s, empresa_id))
+    try:
+        _avisar(empresa_id, *await run_in_threadpool(executar))
+    except ErroApuracao as erro:
+        _avisar(empresa_id, str(erro))
+    return _ir(empresa_id, "/apuracao")
+
+
+@app.post("/empresas/{empresa_id}/apuracao/importar")
+def importar_apuracao(empresa_id: int, arquivos: list[UploadFile] = File(...)):
+    with db.sessao() as s:
+        e = _carregar(s, empresa_id)
+        for f in arquivos:
+            try:
+                n = apuracao.processar_arquivo(s, e, json.loads(f.file.read().decode("utf-8-sig")))
+                _avisar(empresa_id, f"{f.filename}: {n} registro(s) importado(s).")
+            except (ValueError, KeyError, AttributeError) as erro:
+                _avisar(empresa_id, f"{f.filename}: arquivo não reconhecido ({erro}).")
+    return _ir(empresa_id, "/apuracao")
+
+
+@app.head("/webhooks/apuracao-cbs/{token}")
+def webhook_validacao(token: str):
+    """A Receita valida a urlRetorno com HEAD antes de aceitar a solicitação."""
+    with db.sessao() as s:
+        existe = s.scalar(select(models.SolicitacaoApuracao.id).where(models.SolicitacaoApuracao.token_webhook == token))
+    return Response(status_code=200 if existe else 404)
+
+
+@app.post("/webhooks/apuracao-cbs/{token}")
+async def webhook_apuracao(token: str, request: Request):
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(400, "JSON inválido")
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "JSON inválido")
+
+    def executar():
+        with db.sessao() as s:
+            return apuracao.receber_webhook(s, token, payload)
+    try:
+        aceito = await run_in_threadpool(executar)
+    except ErroApuracao:
+        log.exception("Webhook de apuração: falha ao processar")
+        raise HTTPException(503, "Falha temporária")  # não-2xx: a Receita tenta de novo
+    if not aceito:
+        raise HTTPException(404)
+    return {"recebido": True}
 
 
 @app.get("/saude")

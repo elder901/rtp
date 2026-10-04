@@ -6,6 +6,11 @@
   python -m app.cli certificado --cnpj 11222333000181 --pfx C:/certs/loja.pfx      (senha pedida no terminal)
   python -m app.cli dfe [--cnpj 11222333000181]                                     (ideal para o Agendador do Windows)
   python -m app.cli relatorio --cnpj 11222333000181 --inicio 2026-01-01 --fim 2026-06-30 --saida relatorios/loja.xlsx
+  python -m app.cli apuracao credencial --cnpj ... --client-id ... [--ambiente prr|pro]   (secret pedido no terminal)
+  python -m app.cli apuracao solicitar --cnpj ... --tipo debitos|creditos
+  python -m app.cli apuracao verificar [--cnpj ...]
+  python -m app.cli apuracao importar --cnpj ... --arquivo retorno.json
+  python -m app.cli apuracao conciliar --cnpj ... [--pa-inicio 2026-01] [--pa-fim 2026-03] [--saida conciliacao.xlsx]
   python -m app.cli analisar ...   (análise avulsa de uma pasta, sem gravar no banco)
 """
 from __future__ import annotations
@@ -115,6 +120,64 @@ def cmd_relatorio(a):
     _imprimir_resumo(analise, a.saida)
 
 
+def cmd_apuracao(a):
+    import json
+
+    from app.apuracao import conciliacao
+    from app.apuracao import servico as apuracao
+    from app.apuracao.cliente import ErroApuracao
+
+    with db.sessao() as s:
+        if a.acao == "verificar" and not a.cnpj:
+            empresas = list(s.scalars(select(models.Empresa).join(models.SolicitacaoApuracao).where(
+                models.SolicitacaoApuracao.estado.in_(apuracao.ABERTAS)).distinct()))
+        else:
+            if not a.cnpj:
+                sys.exit("Informe --cnpj")
+            empresas = [_empresa(s, a.cnpj)]
+        try:
+            for e in empresas:
+                if a.acao == "credencial":
+                    segredo = os.getenv(a.secret_env) if a.secret_env else getpass.getpass("Client Secret: ")
+                    apuracao.salvar_credencial(s, e, a.client_id or "", segredo or "", a.ambiente)
+                    print("Credencial gravada (cifrada).")
+                elif a.acao == "solicitar":
+                    sol = apuracao.solicitar(s, e, a.tipo)
+                    print(f"{e.cnpj} {a.tipo}: {sol.estado} {sol.mensagem}")
+                elif a.acao == "verificar":
+                    for m in apuracao.verificar_pendentes(s, e):
+                        print(f"{e.cnpj} {m}")
+                elif a.acao == "importar":
+                    n = apuracao.processar_arquivo(s, e, json.loads(a.arquivo.read_text(encoding="utf-8-sig")))
+                    print(f"{n} registro(s) importado(s).")
+                elif a.acao == "conciliar":
+                    conc = conciliacao.conciliar(s, e, a.pa_inicio, a.pa_fim)
+                    for r in conc.resumo():
+                        print(f"{r['tipo']:>9}: {r['notas']} notas | XML {r['cbs_xml']:,.2f} | Receita {r['cbs_receita']:,.2f} | "
+                              f"divergentes {r['divergente']} | só Receita {r['so_receita']} | só XML {r['so_xml']} | "
+                              f"canceladas {r['cancelada']} | ok {r['ok']}")
+                    if a.saida:
+                        _exportar_conciliacao(conc, a.saida)
+                        print(f"Planilha: {a.saida.resolve()}")
+        except (ErroApuracao, ValueError) as erro:
+            sys.exit(str(erro))
+
+
+def _exportar_conciliacao(conc, destino: Path):
+    from openpyxl import Workbook
+
+    from app.relatorios.excel import _aba
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    _aba(wb, "Resumo", conc.resumo())
+    _aba(wb, "Notas", [{"situacao": l.situacao, "lado": l.tipo, "pa": l.pa, "chave": l.chave,
+                        "participante": l.participante, "cbs_xml": l.cbs_xml, "cbs_receita": l.cbs_receita,
+                        "diferenca": l.diferenca, "ajustes": l.ajustes} for l in conc.linhas])
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(destino)
+
+
 def cmd_analisar(a):
     premissas = Premissas(industria=a.industria, anos=_anos(a.anos))
     for campo, valor in [("cbs_referencia", a.cbs), ("ibs_uf_referencia", a.ibs_uf),
@@ -170,6 +233,19 @@ def main(argv: list[str] | None = None):
     pr.add_argument("--calculadora-url")
     pr.set_defaults(func=cmd_relatorio)
 
+    pp = sub.add_parser("apuracao", help="API de apuração da CBS da Receita e conciliação")
+    pp.add_argument("acao", choices=["credencial", "solicitar", "verificar", "importar", "conciliar"])
+    pp.add_argument("--cnpj")
+    pp.add_argument("--client-id")
+    pp.add_argument("--secret-env", help="variável de ambiente com o Client Secret (senão, é perguntado)")
+    pp.add_argument("--ambiente", choices=["prr", "pro"], default="prr")
+    pp.add_argument("--tipo", choices=["debitos", "creditos"])
+    pp.add_argument("--arquivo", type=Path)
+    pp.add_argument("--pa-inicio", help="AAAA-MM")
+    pp.add_argument("--pa-fim", help="AAAA-MM")
+    pp.add_argument("--saida", type=Path)
+    pp.set_defaults(func=cmd_apuracao)
+
     pa = sub.add_parser("analisar", help="análise avulsa de uma pasta/ZIP, sem gravar no banco")
     pa.add_argument("--cnpj", required=True)
     pa.add_argument("--nome", default="")
@@ -190,6 +266,9 @@ def main(argv: list[str] | None = None):
     pa.set_defaults(func=cmd_analisar)
 
     a = p.parse_args(argv)
+    if a.comando == "apuracao" and ((a.acao == "solicitar" and not a.tipo) or (a.acao == "importar" and not a.arquivo)
+                                    or (a.acao == "credencial" and not a.client_id)):
+        p.error("apuracao: solicitar exige --tipo; importar exige --arquivo; credencial exige --client-id")
     if a.comando == "empresa" and a.acao == "criar" and not all([a.cnpj, a.regime, a.uf, a.municipio]):
         p.error("empresa criar exige --cnpj, --regime, --uf e --municipio")
     db.criar_tabelas()

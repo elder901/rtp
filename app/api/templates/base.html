@@ -36,6 +36,7 @@
                    font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; }
   button.secundario, .botao.secundario { background:transparent; color:var(--serie); border:1px solid var(--borda); }
   button.mini { padding:3px 8px; font-size:12px; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
   .acoes { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
   .abas { display:flex; gap:4px; margin:12px 0 0; flex-wrap:wrap; }
   .abas a { padding:8px 14px; border-radius:6px 6px 0 0; text-decoration:none; color:var(--suave); font-weight:600; }
@@ -66,6 +67,7 @@
     <a href="/empresas/{{ e.id }}" class="{{ 'ativa' if aba == 'geral' }}">Dados e notas</a>
     <a href="/empresas/{{ e.id }}/classificacao" class="{{ 'ativa' if aba == 'classificacao' }}">Classificação</a>
     <a href="/empresas/{{ e.id }}/analise" class="{{ 'ativa' if aba == 'analise' }}">Análise</a>
+    <a href="/empresas/{{ e.id }}/apuracao" class="{{ 'ativa' if aba == 'apuracao' }}">Apuração Receita</a>
   </nav>
 {% endif %}
 {% if avisos %}<div class="card">{% for t in avisos %}<div class="alerta">{{ t }}</div>{% endfor %}</div>{% endif %}

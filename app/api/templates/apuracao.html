@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% set nomes = {'divergente': 'Valor divergente', 'so_receita': 'Só na Receita', 'cancelada': 'Cancelada na base',
+                'so_xml': 'Só no XML', 'ok': 'Confere'} %}
+{% set explica = {'divergente': 'CBS apurada pela Receita diferente da destacada no XML',
+                  'so_receita': 'A Receita apurou, mas o XML não está na base: importe a nota',
+                  'cancelada': 'Nota cancelada na base, ainda presente na apuração da Receita',
+                  'so_xml': 'CBS destacada no XML que a Receita ainda não apurou',
+                  'ok': 'Valores iguais (tolerância de R$ 0,01)'} %}
+{% block conteudo %}
+<div class="colunas">
+  <div class="card" style="border-top-left-radius:0">
+    <h2>Credencial da API de apuração da CBS</h2>
+    {% if credencial %}
+      <p>Credencial gravada · ambiente <b>{{ 'Produção restrita (piloto)' if credencial.ambiente == 'prr' else 'Produção' }}</b>
+        <span class="suave">· atualizada em {{ credencial.atualizado_em.strftime('%d/%m/%Y') }}</span></p>
+    {% else %}
+      <p class="suave">Gere o Client ID e o Client Secret no portal RTC (serviço "Gerar Credencial para API") com o
+        certificado da matriz.</p>
+    {% endif %}
+    <form method="post" action="/empresas/{{ e.id }}/apuracao/credencial">
+      <div class="grade">
+        <div><label>Client ID</label><input name="client_id" autocomplete="off" required></div>
+        <div><label>Client Secret</label><input name="client_secret" type="password" autocomplete="off" required></div>
+        <div><label>Ambiente</label><select name="ambiente">
+          <option value="prr" {{ 'selected' if not credencial or credencial.ambiente == 'prr' }}>Produção restrita (piloto)</option>
+          <option value="pro" {{ 'selected' if credencial and credencial.ambiente == 'pro' }}>Produção</option></select></div>
+      </div>
+      <div class="acoes"><button type="submit" class="secundario">{{ 'Trocar' if credencial else 'Gravar' }} credencial</button></div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Buscar débitos e créditos na Receita</h2>
+    {% if not url_publica.startswith('https://') %}
+      <div class="alerta">A API da Receita é assíncrona e só aceita solicitações com um <b>webhook HTTPS público</b>
+        (ela testa o endereço antes de aceitar). Este servidor não tem endereço público configurado
+        (<code>RTP_URL_PUBLICA</code>). Até lá, use a importação do arquivo JSON abaixo.</div>
+    {% endif %}
+    <p class="suave">Consulta incremental: a primeira traz o mês corrente; as seguintes, o que mudou desde a anterior
+      (até 8 dias). Limite da Receita: {{ limite }} solicitações por dia de cada tipo.</p>
+    <div class="acoes">
+      {% for tipo, rotulo in [('debitos', 'Débitos'), ('creditos', 'Créditos')] %}
+      <form method="post" action="/empresas/{{ e.id }}/apuracao/solicitar" style="margin:0">
+        <input type="hidden" name="tipo" value="{{ tipo }}">
+        <button type="submit" {{ 'disabled' if not credencial or not url_publica.startswith('https://') or uso[tipo] >= limite }}>
+          Solicitar {{ rotulo }} ({{ uso[tipo] }}/{{ limite }} hoje)</button>
+      </form>
+      {% endfor %}
+      <form method="post" action="/empresas/{{ e.id }}/apuracao/verificar" style="margin:0">
+        <button type="submit" class="secundario" {{ 'disabled' if not credencial }}>Verificar solicitações em aberto</button>
+      </form>
+    </div>
+    <h3>Importar arquivo JSON da Receita</h3>
+    <form method="post" action="/empresas/{{ e.id }}/apuracao/importar" enctype="multipart/form-data">
+      <input type="file" name="arquivos" accept=".json" multiple required>
+      <div class="acoes"><button type="submit" class="secundario">Importar</button></div>
+    </form>
+  </div>
+</div>
+
+{% if solicitacoes %}
+<div class="card">
+  <h2>Solicitações</h2>
+  <div class="tabela"><table>
+    <tr><th class="txt">Data</th><th class="txt">Tipo</th><th class="txt">Situação</th><th>Registros</th><th class="txt">Mensagem</th></tr>
+    {% for sol in solicitacoes %}
+    <tr><td>{{ sol.criado_em.strftime('%d/%m %H:%M') }}</td><td class="txt">{{ sol.tipo }}</td>
+        <td class="txt"><span class="{{ 'sobe' if sol.estado == 'ERRO' else 'desce' if sol.estado == 'CONCLUIDA' else '' }}">{{ sol.estado }}</span></td>
+        <td>{{ sol.registros }}</td><td class="txt quebra">{{ sol.mensagem }}</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Conciliação: CBS nos XMLs × apuração da Receita</h2>
+  <form method="get" class="grade" style="align-items:end">
+    <div><label>Período de apuração de</label><input type="month" name="pa_inicio" value="{{ pa_inicio }}"></div>
+    <div><label>até</label><input type="month" name="pa_fim" value="{{ pa_fim }}"></div>
+    <div class="acoes" style="margin:0"><button type="submit">Filtrar</button></div>
+  </form>
+  {% if not total_linhas %}
+    <p class="suave">Sem registros da Receita para conciliar. Busque ou importe débitos e créditos.</p>
+  {% else %}
+  <div class="tabela" style="margin-top:16px"><table>
+    <tr><th class="txt">Lado</th><th>Notas</th><th>CBS nos XMLs</th><th>CBS apurada pela Receita</th><th>Ajustes</th>
+        {% for k in ['divergente', 'so_receita', 'cancelada', 'so_xml', 'ok'] %}<th title="{{ explica[k] }}">{{ nomes[k] }}</th>{% endfor %}</tr>
+    {% for r in resumo %}
+    <tr><td>{{ 'Débitos (saídas)' if r.tipo == 'debitos' else 'Créditos (entradas)' }}</td><td>{{ r.notas }}</td>
+        <td>{{ r.cbs_xml|brl }}</td><td>{{ r.cbs_receita|brl }}</td><td>{{ r.ajustes|brl }}</td>
+        {% for k in ['divergente', 'so_receita', 'cancelada', 'so_xml', 'ok'] %}
+        <td>{% if r[k] and k != 'ok' %}<span class="sobe">{{ r[k] }}</span>{% else %}{{ r[k] }}{% endif %}</td>{% endfor %}</tr>
+    {% endfor %}
+  </table></div>
+
+  <h3>Notas ({{ total_linhas }}{{ ', mostrando 500' if total_linhas > 500 }})</h3>
+  <div class="tabela"><table>
+    <tr><th class="txt">Situação</th><th class="txt">Lado</th><th class="txt">PA</th><th class="txt">Chave</th>
+        <th class="txt">Participante</th><th>CBS XML</th><th>CBS Receita</th><th>Diferença</th><th>Ajustes</th></tr>
+    {% for l in linhas %}
+    <tr><td title="{{ explica[l.situacao] }}"><span class="{{ 'desce' if l.situacao == 'ok' else 'sobe' }}">{{ nomes[l.situacao] }}</span></td>
+        <td class="txt">{{ 'débito' if l.tipo == 'debitos' else 'crédito' }}</td><td class="txt">{{ l.pa }}</td>
+        <td class="txt" style="font-family:monospace;font-size:12px">{{ l.chave }}</td><td class="txt">{{ l.participante or '—' }}</td>
+        <td>{{ l.cbs_xml|brl }}</td><td>{{ l.cbs_receita|brl }}</td><td>{{ l.diferenca|brl }}</td><td>{{ l.ajustes|brl }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+</div>
+{% endblock %}

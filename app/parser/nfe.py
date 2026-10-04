@@ -75,8 +75,10 @@ class Item:
     v_ipi: Decimal = ZERO
     v_pis: Decimal = ZERO
     v_cofins: Decimal = ZERO
+    pis_cst: str = ""
     v_issqn: Decimal = ZERO
     ibscbs: IBSCBSDestacado | None = None
+    gtin: str = ""  # cEAN; liga a compra e a venda do mesmo produto mesmo com códigos diferentes
 
     @property
     def tributos_por_dentro(self) -> Decimal:
@@ -165,6 +167,10 @@ def _grupo_unico(pai):
     return filhos[0] if filhos else None
 
 
+def _gtin(valor: str) -> str:
+    return valor if valor.isdigit() and len(valor) in (8, 12, 13, 14) else ""  # descarta "SEM GTIN"
+
+
 def _item(det) -> Item:
     prod = det.find("prod")
     imp = det.find("imposto")
@@ -181,6 +187,7 @@ def _item(det) -> Item:
         v_seg=_d(prod, "vSeg"),
         v_outro=_d(prod, "vOutro"),
         v_desc=_d(prod, "vDesc"),
+        gtin=_gtin(_t(prod, "cEAN")) or _gtin(_t(prod, "cEANTrib")),
     )
     if imp is None:
         return item
@@ -197,7 +204,9 @@ def _item(det) -> Item:
 
     ipi_trib = imp.find("IPI/IPITrib")
     item.v_ipi = _d(ipi_trib, "vIPI") if ipi_trib is not None else ZERO
-    item.v_pis = _d(_grupo_unico(imp.find("PIS")), "vPIS")
+    pis = _grupo_unico(imp.find("PIS"))
+    item.v_pis = _d(pis, "vPIS")
+    item.pis_cst = _t(pis, "CST")
     item.v_cofins = _d(_grupo_unico(imp.find("COFINS")), "vCOFINS")
     item.v_issqn = _d(imp.find("ISSQN"), "vISSQN")
 

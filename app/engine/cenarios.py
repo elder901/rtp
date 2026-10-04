@@ -16,6 +16,9 @@ from app.parser.nfe import Documento, Item, Participante
 
 ZERO = Decimal("0")
 PIS_COFINS_NAO_CUMULATIVO = Decimal("0.0925")
+# CST de PIS do fornecedor em que a aquisição não está sujeita à contribuição e por isso não gera crédito
+# (Lei 10.833/2003, art. 3º, § 2º, II): monofásico, ST, alíquota zero, isenção, sem incidência, suspensão.
+CST_PIS_SEM_CREDITO = {"04", "05", "06", "07", "08", "09"}
 CLASSIFICACAO_PADRAO = ("000", "000001")  # tributação integral
 
 # CFOPs onerosos considerados (3 últimos dígitos): vendas, vendas com ST, combustíveis, serviços.
@@ -96,6 +99,8 @@ def _creditos_atuais(i: Item, empresa: Empresa, fornecedor: Participante, p: Pre
     if empresa.regime == "presumido":
         return icms + ipi
     # Lucro real: PIS/COFINS não cumulativo sobre o custo de aquisição, sem o ICMS (Lei 14.592/2023).
+    if i.pis_cst in CST_PIS_SEM_CREDITO:
+        return icms + ipi
     base_pc = i.valor_operacao + (ZERO if p.industria else i.v_ipi) - i.v_icms
     return icms + ipi + (base_pc * PIS_COFINS_NAO_CUMULATIVO).quantize(Decimal("0.01"))
 
