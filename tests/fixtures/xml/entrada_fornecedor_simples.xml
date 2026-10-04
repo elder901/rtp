@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00"><NFe><infNFe Id="NFe35261077888999000155550010000005671000056789" versao="4.00">
+<ide><cUF>35</cUF><mod>55</mod><serie>1</serie><nNF>567</nNF><dhEmi>2026-03-12T09:00:00-03:00</dhEmi><tpNF>1</tpNF></ide>
+<emit><CNPJ>77888999000155</CNPJ><xNome>UTILIDADES PEQUENA ME</xNome><enderEmit><cMun>3509502</cMun><UF>SP</UF></enderEmit><CRT>1</CRT></emit>
+<dest><CNPJ>11222333000181</CNPJ><xNome>LOJA TESTE LTDA</xNome><enderDest><cMun>3550308</cMun><UF>SP</UF></enderDest></dest>
+<det nItem="1"><prod><cProd>POTE-10</cProd><xProd>POTE PLASTICO 10L</xProd><NCM>39241000</NCM><CFOP>5102</CFOP><uCom>UN</uCom><qCom>50.0000</qCom><vProd>500.00</vProd></prod>
+<imposto><ICMS><ICMSSN101><orig>0</orig><CSOSN>101</CSOSN><pCredSN>2.50</pCredSN><vCredICMSSN>12.50</vCredICMSSN></ICMSSN101></ICMS>
+<PIS><PISOutr><CST>99</CST><vBC>0.00</vBC><pPIS>0.00</pPIS><vPIS>0.00</vPIS></PISOutr></PIS>
+<COFINS><COFINSOutr><CST>99</CST><vBC>0.00</vBC><pCOFINS>0.00</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSOutr></COFINS></imposto></det>
+</infNFe></NFe></nfeProc>

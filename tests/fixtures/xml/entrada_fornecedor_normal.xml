@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00"><NFe><infNFe Id="NFe35261044555666000177550010000012341000012345" versao="4.00">
+<ide><cUF>35</cUF><mod>55</mod><serie>1</serie><nNF>1234</nNF><dhEmi>2026-03-10T10:00:00-03:00</dhEmi><tpNF>1</tpNF></ide>
+<emit><CNPJ>44555666000177</CNPJ><xNome>DISTRIBUIDORA EXEMPLO LTDA</xNome><enderEmit><cMun>3550308</cMun><UF>SP</UF></enderEmit><CRT>3</CRT></emit>
+<dest><CNPJ>11222333000181</CNPJ><xNome>LOJA TESTE LTDA</xNome><enderDest><cMun>3550308</cMun><UF>SP</UF></enderDest></dest>
+<det nItem="1"><prod><cProd>NB-01</cProd><xProd>NOTEBOOK 15 POL</xProd><NCM>84713012</NCM><CFOP>5102</CFOP><uCom>UN</uCom><qCom>1.0000</qCom><vProd>1000.00</vProd></prod>
+<imposto><ICMS><ICMS00><orig>0</orig><CST>00</CST><vBC>1000.00</vBC><pICMS>18.00</pICMS><vICMS>180.00</vICMS></ICMS00></ICMS>
+<IPI><cEnq>999</cEnq><IPITrib><CST>50</CST><vBC>1000.00</vBC><pIPI>5.00</pIPI><vIPI>50.00</vIPI></IPITrib></IPI>
+<PIS><PISAliq><CST>01</CST><vBC>820.00</vBC><pPIS>1.65</pPIS><vPIS>13.53</vPIS></PISAliq></PIS>
+<COFINS><COFINSAliq><CST>01</CST><vBC>820.00</vBC><pCOFINS>7.60</pCOFINS><vCOFINS>62.32</vCOFINS></COFINSAliq></COFINS>
+<IBSCBS><CST>000</CST><cClassTrib>000001</cClassTrib><gIBSCBS><vBC>744.15</vBC><gIBSUF><pIBSUF>0.10</pIBSUF><vIBSUF>0.74</vIBSUF></gIBSUF><gIBSMun><pIBSMun>0.00</pIBSMun><vIBSMun>0.00</vIBSMun></gIBSMun><vIBS>0.74</vIBS><gCBS><pCBS>0.90</pCBS><vCBS>6.70</vCBS></gCBS></gIBSCBS></IBSCBS></imposto></det>
+<det nItem="2"><prod><cProd>ARZ-5</cProd><xProd>ARROZ TIPO 1 5KG</xProd><NCM>10063021</NCM><CFOP>5102</CFOP><uCom>FD</uCom><qCom>20.0000</qCom><vProd>500.00</vProd></prod>
+<imposto><ICMS><ICMS20><orig>0</orig><CST>20</CST><pRedBC>61.11</pRedBC><vBC>194.45</vBC><pICMS>18.00</pICMS><vICMS>35.00</vICMS></ICMS20></ICMS>
+<PIS><PISAliq><CST>06</CST><vBC>0.00</vBC><pPIS>0.00</pPIS><vPIS>0.00</vPIS></PISAliq></PIS>
+<COFINS><COFINSAliq><CST>06</CST><vBC>0.00</vBC><pCOFINS>0.00</pCOFINS><vCOFINS>0.00</vCOFINS></COFINSAliq></COFINS>
+<IBSCBS><CST>200</CST><cClassTrib>200003</cClassTrib><gIBSCBS><vBC>465.00</vBC><vIBS>0.00</vIBS><gCBS><pCBS>0.90</pCBS><vCBS>0.00</vCBS></gCBS></gIBSCBS></IBSCBS></imposto></det>
+</infNFe></NFe></nfeProc>

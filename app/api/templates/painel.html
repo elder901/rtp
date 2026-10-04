@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% macro var(v) -%}
+  {%- if v is none %}<span class="suave">—</span>
+  {%- elif v > 0 %}<span class="sobe">+{{ v }}%</span>
+  {%- elif v < 0 %}<span class="desce">{{ v }}%</span>
+  {%- else %}0%{% endif -%}
+{%- endmacro %}
+{% block conteudo %}
+<div class="card">
+  <h1>{{ a.empresa.nome }}</h1>
+  <p class="suave">CNPJ {{ a.empresa.cnpj }} · {{ a.empresa.regime|capitalize }} · {{ a.empresa.uf }} ·
+    {{ info.lidos }} NF-e lidas ({{ info.duplicados }} duplicadas) · {{ a.itens|length }} itens analisados</p>
+  <a class="botao" href="/analises/{{ id }}/excel">Baixar Excel completo</a>
+</div>
+
+{% if a.alertas %}
+<div class="card"><h2>Alertas</h2>{% for t in a.alertas %}<div class="alerta">{{ t }}</div>{% endfor %}</div>
+{% endif %}
+
+<div class="card">
+  <h2>Carga líquida da empresa (débitos nas saídas − créditos nas entradas)</h2>
+  <div class="tabela"><table>
+    <tr><th class="txt">Cenário</th><th>Vendas líquidas</th><th>Débitos</th><th>Créditos</th><th>Saldo a recolher</th>
+        <th>% sobre vendas</th><th>Diferença vs atual</th></tr>
+    {% for l in resumo %}
+    <tr><td>{{ l.cenario }}</td><td>{{ l.vendas_liquidas|brl }}</td><td>{{ l.debitos|brl }}</td><td>{{ l.creditos|brl }}</td>
+        <td><b>{{ l.saldo_a_recolher|brl }}</b></td><td>{{ l.carga_sobre_vendas_pct if l.carga_sobre_vendas_pct is not none else '—' }}</td>
+        <td>{% if l.diferenca_vs_atual is none %}—{% elif l.diferenca_vs_atual > 0 %}<span class="sobe">+{{ l.diferenca_vs_atual|brl }}</span>{% else %}<span class="desce">{{ l.diferenca_vs_atual|brl }}</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+
+<div class="card">
+  <h2>Por produto (saídas) — variação de preço para manter a receita líquida</h2>
+  <div class="tabela"><table>
+    <tr><th class="txt">Produto</th><th class="txt">NCM</th><th class="txt">cClassTrib</th><th>Valor líquido</th>
+        <th>Carga atual %</th>{% for ano in anos %}<th>Carga {{ ano }} %</th><th>Δ preço {{ ano }}</th>{% endfor %}</tr>
+    {% for p in produtos %}
+    <tr><td class="txt">{{ p.codigo }} · {{ p.descricao }}</td><td class="txt">{{ p.ncm }}</td>
+        <td class="txt">{{ p.cclasstrib }} <span class="tag">{{ p.origem_classificacao }}</span></td>
+        <td>{{ p.valor_liquido|brl }}</td><td>{{ p.carga_atual_pct }}</td>
+        {% for ano in anos %}<td>{{ p['carga_%s_pct'|format(ano)] }}</td><td>{{ var(p['var_preco_%s_pct'|format(ano)]) }}</td>{% endfor %}</tr>
+    {% else %}<tr><td colspan="9" class="txt suave">Nenhuma saída no lote enviado.</td></tr>{% endfor %}
+  </table></div>
+</div>
+
+<div class="card">
+  <h2>Por fornecedor (entradas) — custo efetivo após créditos</h2>
+  <div class="tabela"><table>
+    <tr><th class="txt">Fornecedor</th><th class="txt">Regime</th><th>Valor líquido</th><th>Custo efetivo atual</th>
+        {% for ano in anos %}<th>Custo {{ ano }}</th><th>Δ {{ ano }}</th>{% endfor %}</tr>
+    {% for f in fornecedores %}
+    <tr><td class="txt">{{ f.nome }}<br><span class="suave">{{ f.cnpj }} · {{ f.uf }}</span></td><td class="txt">{{ f.regime }}</td>
+        <td>{{ f.valor_liquido|brl }}</td><td>{{ f.custo_efetivo_atual|brl }}</td>
+        {% for ano in anos %}<td>{{ f['custo_efetivo_%s'|format(ano)]|brl }}</td><td>{{ var(f['var_custo_%s_pct'|format(ano)]) }}</td>{% endfor %}</tr>
+    {% else %}<tr><td colspan="9" class="txt suave">Nenhuma entrada no lote enviado.</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endblock %}
