@@ -22,22 +22,35 @@ BASE_REF = Decimal("1000")
 LOTE = 50
 
 
+# Capítulos NCM alcançados pelo Imposto Seletivo (LC 214/2025): preparações e bebidas (21, 22), fumo (24),
+# bens minerais (25 a 27), veículos, aeronaves e embarcações (87 a 89). Só esses são consultados na base oficial.
+CAPITULOS_IS = {"21", "22", "24", "25", "26", "27", "87", "88", "89"}
+
+
 @dataclass(frozen=True)
 class Chave:
     ncm: str
     cst: str
     cclasstrib: str
     ano: int
+    is_cst: str = ""        # Imposto Seletivo: vazio quando o NCM não é tributado pelo IS
+    is_cclasstrib: str = ""
 
 
 @dataclass
 class AliquotaEfetiva:
-    cbs: Decimal          # % efetivo sobre o valor líquido
+    cbs: Decimal          # % efetivo sobre a base da CBS/IBS (valor líquido + IS cobrado na operação)
     ibs_uf: Decimal
     ibs_mun: Decimal
     reducao_pct: Decimal  # % de redução aplicada pela classificação (0 = tributação integral)
     memoria: str = ""
     erro: str = ""
+    # Imposto Seletivo (alíquotas oficiais da base de regras)
+    is_pct: Decimal = Decimal("0")          # ad valorem efetivamente cobrado nesta operação
+    is_ad_rem: Decimal = Decimal("0")       # R$ por unidade do IS efetivamente cobrado nesta operação
+    is_nominal_pct: Decimal = Decimal("0")  # alíquota ad valorem do produto (mesmo quando cobrada antes)
+    is_ad_rem_nominal: Decimal = Decimal("0")
+    is_unidade: str = ""
 
     @property
     def total(self) -> Decimal:
@@ -110,6 +123,20 @@ class CalculadoraRTC:
                 self._cache_dados[chave] = Decimal(str(valor)) if valor is not None else None
         return self._cache_dados[chave]
 
+    def imposto_seletivo(self, ncm: str, data: str = "2027-01-15") -> dict | None:
+        """Dados do IS do NCM na base oficial (alíquotas, unidade), ou None se o NCM não é tributado pelo IS."""
+        if ncm[:2] not in CAPITULOS_IS:
+            return None
+        chave = ("is", ncm, data)
+        if chave not in self._cache_dados:
+            try:
+                r = self.http.get(f"{self.base_url}/calculadora/dados-abertos/ncm", params={"ncm": ncm, "data": data})
+            except httpx.HTTPError as e:
+                raise ErroCalculadora(f"falha de comunicação com a calculadora: {e}") from e
+            info = r.json() if r.status_code == 200 else {}
+            self._cache_dados[chave] = info if info.get("tributadoPeloImpostoSeletivo") else None
+        return self._cache_dados[chave]
+
     def situacoes_tributarias(self, data: str = "2027-01-01") -> dict[str, dict]:
         """CST -> {descricao, classificacoes: {cClassTrib: descricao}} válidos para NF-e na data."""
         chave = ("situacoes", data)
@@ -169,19 +196,7 @@ class CalculadoraRTC:
             "municipio": municipio,
             "uf": uf,
             "tpDoc": 55,
-            "itens": [
-                {
-                    "numero": n,
-                    "ncm": c.ncm,
-                    "cst": c.cst,
-                    "cClassTrib": c.cclasstrib,
-                    "baseCalculo": float(BASE_REF),
-                    "quantidade": 1,
-                    "unidade": "UN",
-                    "aliquotasNominais": nominais,
-                }
-                for n, c in enumerate(lote, start=1)
-            ],
+            "itens": [self._item(n, c, nominais) for n, c in enumerate(lote, start=1)],
         }
         try:
             r = self.http.post(f"{self.base_url}/calculadora/regime-geral", json=payload)
@@ -196,15 +211,40 @@ class CalculadoraRTC:
 
         objetos = {o["nObj"]: o for o in r.json().get("objetos", [])}
         saida = []
-        for n in range(1, len(lote) + 1):
-            g = (((objetos.get(n) or {}).get("tribCalc") or {}).get("IBSCBS") or {}).get("gIBSCBS") or {}
+        for n, chave in enumerate(lote, start=1):
+            trib = (objetos.get(n) or {}).get("tribCalc") or {}
+            g = (trib.get("IBSCBS") or {}).get("gIBSCBS") or {}
             cbs, uf_, mun = g.get("gCBS") or {}, g.get("gIBSUF") or {}, g.get("gIBSMun") or {}
             red = (cbs.get("gRed") or {}).get("pRedAliq")
-            saida.append(AliquotaEfetiva(
-                cbs=_dec(cbs.get("vCBS")) / BASE_REF * 100,
-                ibs_uf=_dec(uf_.get("vIBSUF")) / BASE_REF * 100,
-                ibs_mun=_dec(mun.get("vIBSMun")) / BASE_REF * 100,
+            base = _dec(g.get("vBC")) or BASE_REF   # com IS cobrado, a base da CBS/IBS inclui o IS
+            efetiva = AliquotaEfetiva(
+                cbs=_dec(cbs.get("vCBS")) / base * 100,
+                ibs_uf=_dec(uf_.get("vIBSUF")) / base * 100,
+                ibs_mun=_dec(mun.get("vIBSMun")) / base * 100,
                 reducao_pct=_dec(red),
                 memoria=cbs.get("memoriaCalculo", ""),
-            ))
+            )
+            seletivo = trib.get("IS") or {}
+            if seletivo:
+                nominal, ad_rem = _dec(seletivo.get("pIS")), _dec(seletivo.get("adRemIS"))
+                cobrado = _dec(seletivo.get("vIS")) > 0
+                efetiva.is_nominal_pct, efetiva.is_ad_rem_nominal = nominal, ad_rem
+                efetiva.is_pct = nominal if cobrado else Decimal("0")
+                efetiva.is_ad_rem = ad_rem if cobrado else Decimal("0")
+                efetiva.is_unidade = seletivo.get("uTrib", "")
+            saida.append(efetiva)
         return saida
+
+    def _item(self, n: int, c: Chave, nominais: dict) -> dict:
+        item = {"numero": n, "ncm": c.ncm, "cst": c.cst, "cClassTrib": c.cclasstrib, "quantidade": 1,
+                "unidade": "UN", "aliquotasNominais": nominais}
+        if c.is_cst:
+            # Base do IS = R$ 1.000 e 1 unidade do IS: separa a parte ad valorem (%) da ad rem (R$ por unidade).
+            info = self.imposto_seletivo(c.ncm) or {}
+            unidade = info.get("unidade") or "UN"
+            item.update(unidade=unidade, impostoSeletivo={"cst": c.is_cst, "cClassTrib": c.is_cclasstrib,
+                                                          "baseCalculo": float(BASE_REF), "quantidade": 1,
+                                                          "unidade": unidade})
+        else:
+            item["baseCalculo"] = float(BASE_REF)
+        return item

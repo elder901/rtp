@@ -47,6 +47,9 @@ class Premissas:
     # Crédito presumido de CBS/IBS em compras de não contribuinte (ex.: produtor rural pessoa física), previsto na
     # LC 214/2025 com percentuais a regulamentar. Padrão conservador: zero.
     credito_presumido_nao_contribuinte_pct: Decimal = D("0")
+    # Imposto Seletivo embutido no preço de revendedores (cobrado antes, no fabricante): % da alíquota aplicada
+    # sobre o preço do revendedor. 100% superestima um pouco, pois o IS incidiu sobre o preço menor do fabricante.
+    repasse_is_revendedor_pct: Decimal = D("100")
     # Alíquota efetiva do DAS da empresa analisada (só para empresas do Simples).
     aliquota_das_pct: Decimal = D("6.0")
     # Repartição do DAS (% do DAS): parcelas que CBS e IBS substituem. Padrão: Anexo I (comércio), 1ª faixa.

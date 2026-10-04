@@ -17,20 +17,23 @@
 <div class="card">
   <div class="indicadores">
     <div class="indicador"><div class="rotulo">Custo efetivo hoje</div><div class="valor">{{ f.custo_atual|brl }}</div></div>
-    <div class="indicador"><div class="rotulo">Custo efetivo em {{ ano }}</div><div class="valor">{{ f.custo_ano|brl }}</div></div>
-    <div class="indicador"><div class="rotulo">Variação</div><div class="valor">{{ var(f.variacao_custo_pct) }}</div></div>
-    <div class="indicador"><div class="rotulo">Preço de equilíbrio</div><div class="valor">{{ var(f.preco_equilibrio_pct, inverso=true) }}</div></div>
+    <div class="indicador"><div class="rotulo">Custo em {{ ano }} a preços de hoje</div><div class="valor">{{ f.custo_precos_hoje|brl }}</div></div>
+    <div class="indicador"><div class="rotulo">Variação se ele mantiver os preços</div><div class="valor">{{ var(f.variacao_custo_pct) }}</div></div>
+    <div class="indicador"><div class="rotulo">Preço de nota de equilíbrio</div><div class="valor">{{ var(f.variacao_preco_nota_equilibrio_pct, inverso=true) }}</div></div>
     <div class="indicador"><div class="rotulo">Economia trocando onde há alternativa</div>
       <div class="valor">{{ f.economia_trocando|brl if f.economia_trocando else '—' }}</div></div>
   </div>
   <p class="suave" style="margin-bottom:0">
-    {% if f.preco_equilibrio_pct is not none and f.preco_equilibrio_pct < 0 %}
-      Para o seu custo em {{ ano }} ficar igual ao de hoje, este fornecedor precisa reduzir o preço líquido em
-      <b>{{ (-f.preco_equilibrio_pct)|pct }}</b>{% if f.regime in ('simples', 'mei') %} — como fornecedor do {{ 'Simples' if f.regime == 'simples' else 'MEI' }},
-      ele transfere pouco crédito de CBS/IBS; a opção dele pelo regime regular de CBS/IBS também resolveria{% endif %}.
-    {% elif f.preco_equilibrio_pct is not none and f.preco_equilibrio_pct > 0 %}
-      Seu custo com este fornecedor cai em {{ ano }}: há folga de até <b>{{ f.preco_equilibrio_pct|pct }}</b> no preço
-      líquido antes de o custo superar o de hoje.
+    {% set eq = f.variacao_preco_nota_equilibrio_pct %}
+    {% if eq is not none and eq < 0 %}
+      Se este fornecedor mantiver os preços de nota, seu custo em {{ ano }} muda {{ var(f.variacao_custo_pct) }}.
+      Para o custo ficar igual ao de hoje, os preços de nota precisam cair <b>{{ (-eq)|pct }}</b>
+      (de {{ f.preco_nota_atual|brl }} para {{ f.preco_nota_equilibrio|brl }} no volume do período)
+      {%- if f.regime in ('simples', 'mei') %} — como fornecedor do {{ 'Simples' if f.regime == 'simples' else 'MEI' }}, ele transfere
+      pouco crédito de CBS/IBS; a opção dele pelo regime regular de CBS/IBS também resolveria{% endif %}.
+    {% elif eq is not none and eq > 0 %}
+      Seu custo com este fornecedor cai em {{ ano }} mesmo a preços de hoje: há folga de até <b>{{ eq|pct }}</b> no preço de
+      nota antes de o custo superar o de hoje.
     {% else %}Custo praticamente neutro em {{ ano }}.{% endif %}</p>
 </div>
 
@@ -38,18 +41,21 @@
   <h2>Produtos deste fornecedor</h2>
   <div class="tabela"><table>
     <tr><th class="txt">Produto</th><th class="txt">EAN</th><th class="txt">cClassTrib</th><th class="txt">Un.</th><th>Qtd.</th>
-        <th>Preço unit. pago</th><th>Custo unit. hoje</th><th>Custo unit. {{ ano }}</th><th>Variação</th>
-        <th>Preço de equilíbrio</th><th class="txt">Melhor fornecedor em {{ ano }}</th><th>Custo unit. dele</th><th>Economia trocando</th></tr>
+        <th>Preço de nota unit. hoje</th><th>Custo unit. hoje</th><th>Custo unit. {{ ano }} a preços de hoje</th><th>Variação</th>
+        <th>Preço de nota de equilíbrio</th><th>Δ preço de nota</th><th>IS no custo {{ ano }}</th>
+        <th class="txt">Melhor fornecedor em {{ ano }} (preços de hoje)</th><th>Custo unit. dele</th><th>Economia trocando</th></tr>
     {% for c in compras %}
     <tr><td class="txt quebra"><a href="/empresas/{{ e.id }}/produtos/{{ c.chave }}?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">{{ c.descricao }}</a>
           <br><span class="suave">{{ c.codigos|join(', ') }} · NCM {{ c.ncm }}</span></td>
         <td class="txt" style="font-family:monospace">{{ c.gtin or '—' }}</td><td class="txt">{{ c.cclasstrib }}</td>
         <td class="txt">{{ c.unidade }}</td><td>{{ c.quantidade|brl }}</td>
-        <td>{{ c.preco_unit|brl }}</td><td>{{ c.custo_unit_atual|brl }}</td><td>{{ c.custo_unit_ano|brl }}</td>
-        <td>{{ var(c.variacao_custo_pct) }}</td><td>{{ var(c.preco_equilibrio_pct, inverso=true) }}</td>
+        <td>{{ c.preco_nota_unit|brl }}</td><td>{{ c.custo_unit_atual|brl }}</td><td>{{ c.custo_unit_precos_hoje|brl }}</td>
+        <td>{{ var(c.variacao_custo_precos_hoje_pct) }}</td>
+        <td><b>{{ c.preco_nota_equilibrio_unit|brl }}</b></td><td>{{ var(c.variacao_preco_nota_equilibrio_pct, inverso=true) }}</td>
+        <td title="{{ c.tratamento_is }}">{{ c.imposto_seletivo_ano|brl if c.imposto_seletivo_ano else '—' }}</td>
         {% if c.melhor and c.melhor is not sameas c %}
         <td class="txt"><a href="/empresas/{{ e.id }}/fornecedores/{{ c.melhor.fornecedor }}?ano={{ ano }}">{{ c.melhor.fornecedor_nome }}</a></td>
-        <td>{{ c.melhor.custo_unit_ano|brl }}</td><td><span class="desce">{{ c.economia_trocando|brl }}</span></td>
+        <td>{{ c.melhor.custo_unit_precos_hoje|brl }}</td><td><span class="desce">{{ c.economia_trocando|brl }}</span></td>
         {% elif c.melhor %}<td class="txt"><span class="desce">este é o melhor</span></td><td>—</td><td>—</td>
         {% else %}<td class="txt suave">sem outro fornecedor</td><td>—</td><td>—</td>{% endif %}</tr>
     {% endfor %}

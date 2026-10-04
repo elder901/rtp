@@ -94,6 +94,13 @@
       <div><label>Crédito presumido — produtor rural / não contribuinte (%)</label><input name="credito_presumido_nao_contribuinte_pct" value="{{ premissas.credito_presumido_nao_contribuinte_pct }}">
         <span class="suave">previsto na LC 214, percentuais a regulamentar</span></div>
     </div>
+    <h3 style="font-size:13px">Imposto Seletivo (bebidas açucaradas e alcoólicas, fumo...)</h3>
+    <p class="suave" style="margin-top:-4px">As alíquotas do IS vêm da base oficial da calculadora. O IS é cobrado uma vez,
+      no fabricante; na venda pelo varejo não incide.</p>
+    <div class="grade">
+      <div><label>IS embutido em compras de revendedor (% da alíquota)</label><input name="repasse_is_revendedor_pct" value="{{ premissas.repasse_is_revendedor_pct }}">
+        <span class="suave">estimativa sobre o preço do distribuidor; 100% é o limite superior</span></div>
+    </div>
     <div id="premissas-simples" {{ 'hidden' if e.regime != 'simples' }}>
       <h3 style="font-size:13px">Empresa do Simples Nacional</h3>
       <p class="suave" style="margin-top:-4px">Dependem do anexo e da faixa de faturamento; não aparecem em nota fiscal.</p>

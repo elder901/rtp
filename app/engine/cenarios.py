@@ -22,6 +22,12 @@ PIS_COFINS_NAO_CUMULATIVO = Decimal("0.0925")
 CST_PIS_SEM_CREDITO = {"04", "05", "06", "07", "08", "09"}
 CLASSIFICACAO_PADRAO = ("000", "000001")  # tributação integral
 
+# CFOPs de venda de produção do próprio estabelecimento: quem vende é o fabricante, e é nele que o Imposto
+# Seletivo é cobrado (primeiro fornecimento). Nas revendas o IS já foi cobrado antes (cClassTrib IS 200007).
+CFOP_PRODUCAO_PROPRIA = {"101", "103", "105", "107", "109", "111", "113", "116", "118", "122", "401", "402"}
+# Unidades comerciais equivalentes a 1 unidade do IS para a parte ad rem (ex.: cigarro, VN = maço de 20).
+UNIDADES_EQUIVALENTES_IS = {"VN": {"VN", "MC", "MACO", "MAÇO", "UN", "UND", "UNID"}}
+
 # CFOPs onerosos considerados (3 últimos dígitos): vendas, vendas com ST, combustíveis, serviços.
 CFOP_ONEROSOS = {f"{n:03d}" for n in [*range(101, 125), *range(401, 406), *range(651, 657), 933]}
 
@@ -48,6 +54,7 @@ class ValoresCenario:
     creditos: Decimal = ZERO  # créditos que a empresa aproveita (só entradas)
     cbs: Decimal = ZERO
     ibs: Decimal = ZERO
+    imposto_seletivo: Decimal = ZERO  # já incluído em tributos; nunca gera crédito
 
     def preco(self, valor_liquido: Decimal) -> Decimal:
         return valor_liquido + self.tributos
@@ -67,6 +74,7 @@ class ResultadoItem:
     atual: ValoresCenario
     anos: dict[int, ValoresCenario] = field(default_factory=dict)
     aliquotas: dict[int, AliquotaEfetiva] = field(default_factory=dict)
+    imposto_seletivo: str = ""  # "" | cobrado (fabricante) | embutido (revendedor) | não incide (venda)
 
 
 @dataclass
@@ -158,14 +166,81 @@ def _creditos_atuais(i: Item, empresa: Empresa, fornecedor: Participante, p: Pre
     return icms + ipi + (base_pc * PIS_COFINS_NAO_CUMULATIVO).quantize(Decimal("0.01"))
 
 
-def _tributos_reforma(i: Item, ano: int, aliq: AliquotaEfetiva) -> tuple[Decimal, Decimal, Decimal]:
+def taxa_por_dentro(i: Item, ano: int | None = None) -> Decimal:
+    """Parte do preço de nota que é tributo embutido (ICMS, FCP, ISS; e PIS/COFINS hoje). ano=None: hoje."""
+    if not i.valor_operacao:
+        return ZERO
+    if ano is None:
+        return i.tributos_por_dentro / i.valor_operacao
     t = TRANSICAO[ano]
-    vl = i.valor_liquido
-    cbs = (vl * aliq.cbs / 100).quantize(Decimal("0.01"))
-    ibs = (vl * (aliq.ibs_uf + aliq.ibs_mun) / 100).quantize(Decimal("0.01"))
-    residuais = (_icms_total(i) + i.v_issqn) * t.fator_icms_iss + i.v_ipi * t.fator_ipi \
-        + (i.v_pis + i.v_cofins) * t.fator_pis_cofins
-    return residuais + cbs + ibs, cbs, ibs
+    return ((i.v_icms + i.v_fcp + i.v_issqn) * t.fator_icms_iss
+            + (i.v_pis + i.v_cofins) * t.fator_pis_cofins) / i.valor_operacao
+
+
+def escala_preco(i: Item, ano: int) -> Decimal:
+    """Preço de nota no ano (mantido o valor líquido) / preço de nota de hoje.
+
+    Ex.: em 2027 o PIS/COFINS sai do preço e só o ICMS continua embutido, então o mesmo valor líquido corresponde a
+    um preço de nota menor. ICMS, FCP, ISS, ICMS-ST e IPI são proporcionais ao preço e acompanham essa razão.
+    """
+    if not i.valor_operacao:
+        return Decimal(1)
+    return i.valor_liquido / (1 - taxa_por_dentro(i, ano)) / i.valor_operacao
+
+
+def _residuais(i: Item, ano: int) -> Decimal:
+    """Tributos atuais que ainda existem no ano, recalculados sobre o preço de nota daquele ano."""
+    t = TRANSICAO[ano]
+    proporcionais = (_icms_total(i) + i.v_issqn) * t.fator_icms_iss + i.v_ipi * t.fator_ipi
+    return proporcionais * escala_preco(i, ano) + (i.v_pis + i.v_cofins) * t.fator_pis_cofins
+
+
+def _tributos_reforma(i: Item, ano: int, aliq: AliquotaEfetiva,
+                      imposto_seletivo: Decimal = ZERO) -> tuple[Decimal, Decimal, Decimal]:
+    """O IS integra a base da CBS/IBS (LC 214/2025): base = valor líquido + IS."""
+    base = i.valor_liquido + imposto_seletivo
+    cbs = (base * aliq.cbs / 100).quantize(Decimal("0.01"))
+    ibs = (base * (aliq.ibs_uf + aliq.ibs_mun) / 100).quantize(Decimal("0.01"))
+    residuais = _residuais(i, ano).quantize(Decimal("0.01"))
+    return residuais + imposto_seletivo + cbs + ibs, cbs, ibs
+
+
+def _tratamento_is(item: Item, ncms_is: set[str]) -> tuple[str, str]:
+    """CST/cClassTrib do IS da operação: cobrado na venda de produção própria; já cobrado antes nas revendas."""
+    if item.ncm not in ncms_is:
+        return "", ""
+    return ("000", "000001") if item.cfop[-3:] in CFOP_PRODUCAO_PROPRIA else ("200", "200007")
+
+
+def _quantidade_is(item: Item, unidade_is: str) -> Decimal | None:
+    if not unidade_is or item.unidade.upper() in UNIDADES_EQUIVALENTES_IS.get(unidade_is, {unidade_is}):
+        return item.quantidade
+    return None
+
+
+def _valor_is(item: Item, aliq: AliquotaEfetiva, direcao: str, p: Premissas,
+              avisos: set[str]) -> tuple[Decimal, str]:
+    """Valor do IS que pesa nesta operação e o tratamento. Compra de fabricante: IS cobrado na própria nota
+    (alíquotas oficiais). Compra de revendedor: IS cobrado antes e embutido no preço — estimado com a alíquota
+    oficial sobre o preço do revendedor x repasse (premissa; limite superior com 100%)."""
+    if aliq.is_pct or aliq.is_ad_rem:
+        pct, ad_rem, fator, tratamento = aliq.is_pct, aliq.is_ad_rem, Decimal(1), "cobrado (fabricante)"
+    elif direcao == "entrada" and (aliq.is_nominal_pct or aliq.is_ad_rem_nominal):
+        pct, ad_rem = aliq.is_nominal_pct, aliq.is_ad_rem_nominal
+        fator, tratamento = p.repasse_is_revendedor_pct / 100, "embutido (revendedor, estimado)"
+    elif aliq.is_nominal_pct or aliq.is_ad_rem_nominal:
+        return ZERO, "não incide (revenda)"
+    else:
+        return ZERO, ""
+    valor = item.valor_liquido * pct / 100
+    if ad_rem:
+        qtd = _quantidade_is(item, aliq.is_unidade)
+        if qtd is None:
+            avisos.add(f"NCM {item.ncm}: parte ad rem do IS (R$ {ad_rem} por {aliq.is_unidade}) não incluída — a "
+                       f"unidade da nota ({item.unidade}) não equivale à do IS.")
+        else:
+            valor += ad_rem * qtd
+    return (valor * fator).quantize(Decimal("0.01")), tratamento
 
 
 def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas,
@@ -188,7 +263,18 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
                 continue
             pendentes.append((direcao, doc, item, contraparte, _classificar(item, overrides)))
 
-    chaves = {Chave(it.ncm, c.cst, c.cclasstrib, ano) for _, _, it, _, c in pendentes for ano in premissas.anos}
+    ncms_is: set[str] = set()
+    if hasattr(calculadora, "imposto_seletivo"):
+        for ncm in {it.ncm for _, _, it, _, _ in pendentes}:
+            try:
+                if calculadora.imposto_seletivo(ncm):
+                    ncms_is.add(ncm)
+            except Exception:  # noqa: BLE001 — sem a base oficial não dá para saber; avisa
+                alertas.append(f"Não foi possível verificar na calculadora se o NCM {ncm} tem Imposto Seletivo.")
+    tratamento_is = {id(it): _tratamento_is(it, ncms_is) for _, _, it, _, _ in pendentes}
+    chaves = {Chave(it.ncm, c.cst, c.cclasstrib, ano, *tratamento_is[id(it)])
+              for _, _, it, _, c in pendentes for ano in premissas.anos}
+    avisos_is: set[str] = set()
     nominais, origens = {}, {}
     for ano in premissas.anos:
         nominais[ano], origens[ano] = premissas.aliquotas_do_ano(ano, calculadora, CODIGO_UF.get(empresa.uf),
@@ -210,9 +296,10 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
                                      _creditos_atuais(item, empresa, contraparte, premissas))
 
         for ano in premissas.anos:
-            aliq = aliquotas[Chave(item.ncm, classif.cst, classif.cclasstrib, ano)]
+            aliq = aliquotas[Chave(item.ncm, classif.cst, classif.cclasstrib, ano, *tratamento_is[id(item)])]
             r.aliquotas[ano] = aliq
             t = TRANSICAO[ano]
+            valor_is, r.imposto_seletivo = _valor_is(item, aliq, direcao, premissas, avisos_is)
             if direcao == "saida" and empresa.regime == "simples":
                 # Permanecendo no Simples, ICMS/PIS/COFINS dentro do DAS dão lugar a IBS/CBS dentro do DAS.
                 r.anos[ano] = ValoresCenario(r.atual.tributos)
@@ -221,27 +308,30 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
                 # Fornecedor do Simples/MEI continua recolhendo pelo DAS e o não contribuinte (produtor rural
                 # pessoa física) não recolhe CBS/IBS: o preço não muda, mas o crédito do adquirente passa a ser só
                 # a parcela de CBS/IBS do DAS ou o crédito presumido (premissas).
-                tributos = item.tributos_por_dentro + (item.v_icms_st + item.v_fcp_st) * t.fator_icms_iss
+                tributos = _residuais(item, ano).quantize(Decimal("0.01")) + valor_is
                 cred = ZERO
                 if empresa.regime != "simples":
                     pct = {"simples": premissas.credito_fornecedor_simples_pct,
                            "mei": premissas.credito_fornecedor_mei_pct,
                            "nao_contribuinte": premissas.credito_presumido_nao_contribuinte_pct}[contraparte.regime]
-                    icms_residual = (item.v_cred_icms_sn if contraparte.regime in ("simples", "mei")
-                                     else item.v_icms + item.v_fcp) * t.fator_icms_iss
+                    icms_residual = ((item.v_cred_icms_sn if contraparte.regime in ("simples", "mei")
+                                      else item.v_icms + item.v_fcp) * t.fator_icms_iss
+                                     * escala_preco(item, ano)).quantize(Decimal("0.01"))
                     cred = (item.valor_liquido * pct / 100).quantize(Decimal("0.01")) + icms_residual
-                r.anos[ano] = ValoresCenario(tributos, cred)
+                r.anos[ano] = ValoresCenario(tributos, cred, imposto_seletivo=valor_is)
                 continue
 
-            tributos, cbs, ibs = _tributos_reforma(item, ano, aliq)
+            tributos, cbs, ibs = _tributos_reforma(item, ano, aliq, valor_is)
             cred = ZERO
             if direcao == "entrada" and empresa.regime != "simples":
                 # Crédito amplo de CBS/IBS + ICMS residual da transição.
-                cred = cbs + ibs + (item.v_icms + item.v_fcp) * t.fator_icms_iss
-            r.anos[ano] = ValoresCenario(tributos, cred, cbs, ibs)
+                cred = cbs + ibs + ((item.v_icms + item.v_fcp) * t.fator_icms_iss
+                                    * escala_preco(item, ano)).quantize(Decimal("0.01"))
+            r.anos[ano] = ValoresCenario(tributos, cred, cbs, ibs, valor_is)
         resultados.append(r)
 
     _alertas_gerais(resultados, empresa, alertas, ignorados)
+    _alertas_is(resultados, premissas, alertas, avisos_is)
     ident = calculadora.identificacao() if hasattr(calculadora, "identificacao") else {}
     usadas = {ano: {"aliquotas": nominais[ano], "origens": origens[ano]} for ano in premissas.anos}
     if any(o != "oficial" for u in usadas.values() for o in u["origens"].values()):
@@ -249,6 +339,21 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
                        "usadas as alíquotas de referência das premissas. Quando a Receita publicar, as oficiais passam "
                        "a ser usadas automaticamente.")
     return Analise(empresa, premissas, resultados, alertas, ignorados, ident, usadas)
+
+
+def _alertas_is(resultados: list[ResultadoItem], p: Premissas, alertas: list[str], avisos: set[str]):
+    com_is = [r for r in resultados if r.imposto_seletivo]
+    if not com_is:
+        return
+    ncms = sorted({r.item.ncm for r in com_is})
+    alertas.append(f"Imposto Seletivo em {len(com_is)} item(ns), NCM {', '.join(ncms[:12])}{'...' if len(ncms) > 12 else ''} "
+                   f"(alíquotas oficiais da calculadora). Na venda pela empresa o IS não incide; em compras de fabricante "
+                   f"entra no custo sem crédito.")
+    if any(r.imposto_seletivo.startswith("embutido") for r in com_is):
+        alertas.append(f"Compras de revendedor de produtos com IS: o imposto foi cobrado no fabricante e está embutido no "
+                       f"preço; estimado com a alíquota sobre o preço do revendedor x repasse de "
+                       f"{p.repasse_is_revendedor_pct}% (premissa; 100% é o limite superior).")
+    alertas.extend(sorted(avisos))
 
 
 def _alertas_gerais(resultados: list[ResultadoItem], empresa: Empresa, alertas: list[str], ignorados: int):

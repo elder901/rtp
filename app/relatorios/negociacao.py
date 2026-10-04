@@ -1,9 +1,16 @@
-"""Visões para negociação com fornecedores: custo efetivo de compra (preço pago - créditos) hoje e em um ano da
-transição, por fornecedor e por produto, e comparação entre fornecedores do mesmo produto (mesmo EAN).
+"""Visões para negociação com fornecedores e formação de preço, por produto (EAN).
 
-Preço de equilíbrio: tributos e créditos são proporcionais ao preço líquido (sem tributos), então o custo efetivo é
-linear nele. A variação de preço líquido que mantém o custo de hoje é custo_atual / custo_ano - 1:
-negativa = o fornecedor precisa reduzir o preço; positiva = há espaço para aceitar aumento.
+Custo efetivo de compra = preço pago - créditos aproveitáveis. Para cada ano da transição há dois cenários de compra:
+- **a preços de hoje**: o fornecedor mantém o preço de nota. Ex.: o fim do PIS/COFINS em 2027 vira margem dele e o
+  seu custo sobe na medida do crédito de 9,25% perdido;
+- **com repasse**: o fornecedor mantém o próprio valor líquido e o preço de nota cai na medida dos tributos que saíram.
+
+Preço de nota de equilíbrio: o preço de nota que, no ano, mantém o seu custo efetivo de hoje — é o número a levar à
+negociação. Como tributos e créditos são proporcionais ao valor líquido, o custo no ano é c x valor líquido e o preço
+de nota é valor líquido / (1 - parte embutida do preço naquele ano).
+
+Na venda, com o EAN ligando compra e venda: preço ao consumidor, custo e margem unitários hoje e no ano, mantendo a
+gôndola ou mantendo a margem, com o fornecedor mantendo o preço ou repassando.
 """
 from __future__ import annotations
 
@@ -11,15 +18,19 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from app.engine.cenarios import Analise, ResultadoItem
+from app.engine.cenarios import Analise, ResultadoItem, taxa_por_dentro
 
 ZERO = Decimal("0")
 DUAS = Decimal("0.01")
 QUATRO = Decimal("0.0001")
 
 
-def _pct(novo: Decimal, antigo: Decimal) -> Decimal | None:
-    return ((novo / antigo - 1) * 100).quantize(DUAS) if antigo else None
+def _pct(novo: Decimal | None, antigo: Decimal | None) -> Decimal | None:
+    return ((novo / antigo - 1) * 100).quantize(DUAS) if novo is not None and antigo else None
+
+
+def _unit(total: Decimal, qtd: Decimal) -> Decimal | None:
+    return (total / qtd).quantize(QUATRO) if qtd else None
 
 
 @dataclass
@@ -41,42 +52,71 @@ class Compra:
     preco_pago: Decimal = ZERO
     creditos_atual: Decimal = ZERO
     custo_atual: Decimal = ZERO
+    # ano analisado
     creditos_ano: Decimal = ZERO
-    custo_ano: Decimal = ZERO
+    custo_ano: Decimal = ZERO                 # com repasse (fornecedor mantém o próprio valor líquido)
+    custo_precos_hoje: Decimal = ZERO         # fornecedor mantém o preço de nota
+    preco_nota_atual: Decimal = ZERO
+    preco_nota_repasse: Decimal = ZERO
+    preco_nota_equilibrio: Decimal = ZERO     # preço de nota que mantém o seu custo de hoje
+    imposto_seletivo_ano: Decimal = ZERO      # IS cobrado na compra ou embutido no preço do revendedor (sem crédito)
+    tratamento_is: str = ""
     notas: set[str] = field(default_factory=set)
-    melhor: "Compra | None" = None   # menor custo no ano entre os fornecedores do mesmo produto e unidade
+    melhor: "Compra | None" = None   # menor custo no ano, a preços de hoje, entre fornecedores do mesmo produto e unidade
 
     @property
     def custo_unit_atual(self) -> Decimal | None:
-        return (self.custo_atual / self.quantidade).quantize(QUATRO) if self.quantidade else None
+        return _unit(self.custo_atual, self.quantidade)
 
     @property
     def custo_unit_ano(self) -> Decimal | None:
-        return (self.custo_ano / self.quantidade).quantize(QUATRO) if self.quantidade else None
+        return _unit(self.custo_ano, self.quantidade)
+
+    @property
+    def custo_unit_precos_hoje(self) -> Decimal | None:
+        return _unit(self.custo_precos_hoje, self.quantidade)
 
     @property
     def preco_unit(self) -> Decimal | None:
-        return (self.preco_pago / self.quantidade).quantize(QUATRO) if self.quantidade else None
+        return _unit(self.preco_pago, self.quantidade)
+
+    @property
+    def preco_nota_unit(self) -> Decimal | None:
+        return _unit(self.preco_nota_atual, self.quantidade)
+
+    @property
+    def preco_nota_equilibrio_unit(self) -> Decimal | None:
+        return _unit(self.preco_nota_equilibrio, self.quantidade)
+
+    @property
+    def variacao_preco_nota_equilibrio_pct(self) -> Decimal | None:
+        """Quanto o preço de nota pode variar para o seu custo no ano ficar igual ao de hoje (negativo = desconto)."""
+        return _pct(self.preco_nota_equilibrio, self.preco_nota_atual)
+
+    @property
+    def variacao_custo_precos_hoje_pct(self) -> Decimal | None:
+        return _pct(self.custo_precos_hoje, self.custo_atual)
 
     @property
     def variacao_custo_pct(self) -> Decimal | None:
+        """Com repasse."""
         return _pct(self.custo_ano, self.custo_atual)
 
     @property
     def variacao_custo(self) -> Decimal:
-        return self.custo_ano - self.custo_atual
+        return self.custo_precos_hoje - self.custo_atual
 
     @property
     def preco_equilibrio_pct(self) -> Decimal | None:
-        """Variação do preço líquido que mantém o custo efetivo de hoje no ano analisado."""
+        """Variação do valor líquido do fornecedor que mantém o seu custo (referência técnica; ver preço de nota)."""
         return _pct(self.custo_atual, self.custo_ano) if self.custo_ano else None
 
     @property
     def economia_trocando(self) -> Decimal | None:
-        """Quanto o mesmo volume custaria a menos no ano comprando do melhor fornecedor do mesmo produto."""
-        if not self.melhor or self.melhor is self or self.melhor.custo_unit_ano is None:
+        """Quanto o mesmo volume custaria a menos no ano, a preços de hoje, comprando do melhor fornecedor."""
+        if not self.melhor or self.melhor is self or self.melhor.custo_unit_precos_hoje is None:
             return None
-        return ((self.custo_unit_ano - self.melhor.custo_unit_ano) * self.quantidade).quantize(DUAS)
+        return ((self.custo_unit_precos_hoje - self.melhor.custo_unit_precos_hoje) * self.quantidade).quantize(DUAS)
 
 
 def compras(a: Analise, ano: int) -> list[Compra]:
@@ -94,23 +134,40 @@ def compras(a: Analise, ano: int) -> list[Compra]:
                                    i.chave, i.gtin, [], i.descricao, i.ncm, r.classificacao.cclasstrib, unidade)
         if i.codigo not in c.codigos:
             c.codigos.append(i.codigo)
-        v = r.anos[ano]
+        v, vl = r.anos[ano], i.valor_liquido
+        custo_hoje, custo_ano = r.atual.custo_ou_receita(vl), v.custo_ou_receita(vl)
         c.quantidade += qtd
-        c.valor_liquido += i.valor_liquido
-        c.preco_pago += r.atual.preco(i.valor_liquido)
+        c.valor_liquido += vl
+        c.preco_pago += r.atual.preco(vl)
         c.creditos_atual += r.atual.creditos
-        c.custo_atual += r.atual.custo_ou_receita(i.valor_liquido)
+        c.custo_atual += custo_hoje
         c.creditos_ano += v.creditos
-        c.custo_ano += v.custo_ou_receita(i.valor_liquido)
+        c.custo_ano += custo_ano
+        c.imposto_seletivo_ano += v.imposto_seletivo
+        c.tratamento_is = c.tratamento_is or r.imposto_seletivo
         c.notas.add(r.documento.chave)
+        c.preco_nota_atual += i.valor_operacao
+        if vl > 0 and i.valor_operacao:
+            fator = custo_ano / vl                     # custo no ano por R$ de valor líquido
+            embutido = 1 - taxa_por_dentro(i, ano)     # parte do preço de nota que não é tributo embutido
+            c.preco_nota_repasse += vl / embutido
+            c.custo_precos_hoje += fator * i.valor_operacao * embutido
+            c.preco_nota_equilibrio += (custo_hoje / fator / embutido) if fator else i.valor_operacao
+        else:
+            c.preco_nota_repasse += i.valor_operacao
+            c.custo_precos_hoje += custo_ano
+            c.preco_nota_equilibrio += i.valor_operacao
+    for c in grupos.values():
+        for nome in ("custo_precos_hoje", "preco_nota_repasse", "preco_nota_equilibrio"):
+            setattr(c, nome, getattr(c, nome).quantize(DUAS))
 
-    # melhor fornecedor de cada produto (mesmo EAN/código e mesma unidade) no ano
+    # melhor fornecedor de cada produto (mesmo EAN/código e mesma unidade) no ano, a preços de hoje
     por_produto: dict[tuple, list[Compra]] = defaultdict(list)
     for c in grupos.values():
         por_produto[(c.chave, c.unidade)].append(c)
     for lista in por_produto.values():
-        validos = [c for c in lista if c.custo_unit_ano is not None]
-        melhor = min(validos, key=lambda c: c.custo_unit_ano) if validos else None
+        validos = [c for c in lista if c.custo_unit_precos_hoje is not None]
+        melhor = min(validos, key=lambda c: c.custo_unit_precos_hoje) if validos else None
         for c in lista:
             c.melhor = melhor if len(lista) > 1 else None
     return list(grupos.values())
@@ -125,18 +182,30 @@ class ResumoFornecedor:
     produtos: int
     notas: int
     valor_liquido: Decimal
+    preco_nota_atual: Decimal
+    preco_nota_equilibrio: Decimal
     custo_atual: Decimal
     custo_ano: Decimal
+    custo_precos_hoje: Decimal
     economia_trocando: Decimal
     produtos_com_alternativa: int
 
     @property
     def variacao_custo(self) -> Decimal:
-        return self.custo_ano - self.custo_atual
+        """A preços de hoje."""
+        return self.custo_precos_hoje - self.custo_atual
 
     @property
     def variacao_custo_pct(self) -> Decimal | None:
+        return _pct(self.custo_precos_hoje, self.custo_atual)
+
+    @property
+    def variacao_custo_repasse_pct(self) -> Decimal | None:
         return _pct(self.custo_ano, self.custo_atual)
+
+    @property
+    def variacao_preco_nota_equilibrio_pct(self) -> Decimal | None:
+        return _pct(self.preco_nota_equilibrio, self.preco_nota_atual)
 
     @property
     def preco_equilibrio_pct(self) -> Decimal | None:
@@ -150,13 +219,25 @@ def fornecedores(lista: list[Compra]) -> list[ResumoFornecedor]:
     saida = []
     for cnpj, cs in grupos.items():
         c0 = cs[0]
+
+        def soma(nome):
+            return sum((getattr(c, nome) for c in cs), ZERO)
+
         saida.append(ResumoFornecedor(
             cnpj, c0.fornecedor_nome, c0.regime, c0.uf, len(cs), len(set().union(*(c.notas for c in cs))),
-            sum((c.valor_liquido for c in cs), ZERO), sum((c.custo_atual for c in cs), ZERO),
-            sum((c.custo_ano for c in cs), ZERO),
-            sum((c.economia_trocando or ZERO for c in cs), ZERO),
-            sum(1 for c in cs if c.economia_trocando)))
+            soma("valor_liquido"), soma("preco_nota_atual"), soma("preco_nota_equilibrio"), soma("custo_atual"),
+            soma("custo_ano"), soma("custo_precos_hoje"),
+            sum((c.economia_trocando or ZERO for c in cs), ZERO), sum(1 for c in cs if c.economia_trocando)))
     return sorted(saida, key=lambda f: -f.variacao_custo)
+
+
+@dataclass
+class CenarioPreco:
+    nome: str
+    preco: Decimal | None       # preço unitário ao consumidor
+    custo: Decimal | None       # custo efetivo unitário de compra
+    margem: Decimal | None      # valor líquido unitário de venda - custo
+    margem_pct: Decimal | None  # margem / valor líquido de venda
 
 
 @dataclass
@@ -168,7 +249,10 @@ class ResumoProduto:
     ncm: str
     cclasstrib: str
     origem_classificacao: str
+    unidade_venda: str = ""
+    quantidade_venda: Decimal = ZERO
     vendas_liquidas: Decimal = ZERO
+    receita_consumidor: Decimal = ZERO
     tributos_venda_atual: Decimal = ZERO
     tributos_venda_ano: Decimal = ZERO
     compras: list[Compra] = field(default_factory=list)
@@ -183,10 +267,11 @@ class ResumoProduto:
 
     @property
     def custo_ano(self) -> Decimal:
-        return sum((c.custo_ano for c in self.compras), ZERO)
+        return sum((c.custo_precos_hoje for c in self.compras), ZERO)
 
     @property
     def variacao_custo_pct(self) -> Decimal | None:
+        """A preços de hoje."""
         return _pct(self.custo_ano, self.custo_atual)
 
     @property
@@ -208,6 +293,61 @@ class ResumoProduto:
     def economia_possivel(self) -> Decimal:
         return sum((c.economia_trocando or ZERO for c in self.compras), ZERO)
 
+    # --- preço de venda e margem por unidade (EAN liga a venda às compras na mesma unidade) ----------------------
+    def _compras_mesma_unidade(self) -> list[Compra]:
+        return [c for c in self.compras if c.unidade == self.unidade_venda and c.quantidade]
+
+    def _custo_unit(self, nome: str) -> Decimal | None:
+        cs = self._compras_mesma_unidade()
+        qtd = sum((c.quantidade for c in cs), ZERO)
+        return _unit(sum((getattr(c, nome) for c in cs), ZERO), qtd) if qtd else None
+
+    @property
+    def preco_venda_unit(self) -> Decimal | None:
+        return _unit(self.receita_consumidor, self.quantidade_venda)
+
+    @property
+    def margem_unit_atual(self) -> Decimal | None:
+        custo = self._custo_unit("custo_atual")
+        vl = _unit(self.vendas_liquidas, self.quantidade_venda)
+        return (vl - custo).quantize(DUAS) if custo is not None and vl is not None else None
+
+    def cenarios_preco(self, ano: int) -> list[CenarioPreco]:
+        """Preço ao consumidor, custo e margem unitários hoje e no ano em quatro combinações de decisão."""
+        if not self.quantidade_venda or not self.vendas_liquidas:
+            return []
+        vl_hoje = self.vendas_liquidas / self.quantidade_venda
+        p_hoje = self.receita_consumidor / self.quantidade_venda
+        carga = self.tributos_venda_ano / self.vendas_liquidas          # tributos/valor líquido no ano
+        c_hoje = self._custo_unit("custo_atual")
+        c_precos, c_repasse = self._custo_unit("custo_precos_hoje"), self._custo_unit("custo_ano")
+
+        def cenario(nome, preco, custo, vl=None):
+            vl = vl if vl is not None else preco / (1 + carga)
+            margem = (vl - custo) if custo is not None else None
+            return CenarioPreco(nome, preco.quantize(DUAS), custo.quantize(DUAS) if custo is not None else None,
+                                margem.quantize(DUAS) if margem is not None else None,
+                                (margem / vl * 100).quantize(DUAS) if margem is not None and vl else None)
+
+        saida = [cenario("Hoje", p_hoje, c_hoje, vl_hoje)]
+        if c_hoje is None:  # sem compra na mesma unidade: só o efeito na venda
+            saida.append(cenario("Mantendo o preço de gôndola", p_hoje, None))
+            saida.append(cenario("Mantendo a receita líquida", vl_hoje * (1 + carga), None))
+            return saida
+        m_hoje = vl_hoje - c_hoje
+        saida += [
+            cenario("Gôndola mantida · fornecedor mantém o preço", p_hoje, c_precos),
+            cenario("Gôndola mantida · fornecedor repassa", p_hoje, c_repasse),
+            cenario("Margem mantida · fornecedor mantém o preço", (c_precos + m_hoje) * (1 + carga), c_precos),
+            cenario("Margem mantida · fornecedor repassa", (c_repasse + m_hoje) * (1 + carga), c_repasse),
+        ]
+        return saida
+
+    def margem_ano_precos_hoje(self, ano: int) -> CenarioPreco | None:
+        """Se ninguém mudar preço: gôndola e fornecedor mantêm os preços de hoje."""
+        cs = self.cenarios_preco(ano)
+        return cs[1] if len(cs) > 1 and cs[1].nome.startswith("Gôndola mantida · fornecedor mantém") else None
+
 
 def produtos(a: Analise, lista: list[Compra], ano: int) -> list[ResumoProduto]:
     saida: dict[str, ResumoProduto] = {}
@@ -222,12 +362,18 @@ def produtos(a: Analise, lista: list[Compra], ano: int) -> list[ResumoProduto]:
             p.codigos.append(i.codigo)
         return p
 
-    for r in a.itens:  # vendas primeiro: descrição e classificação da loja têm precedência
+    for r in a.itens:  # vendas primeiro: descrição, unidade e classificação da loja têm precedência
         if r.direcao == "saida":
             p = resumo(r)
-            p.vendas_liquidas += r.item.valor_liquido
-            p.tributos_venda_atual += r.atual.tributos
-            p.tributos_venda_ano += r.anos[ano].tributos
+            i = r.item
+            unidade = (i.unidade_gtin or i.unidade).upper()
+            p.unidade_venda = p.unidade_venda or unidade
+            if unidade == p.unidade_venda:
+                p.quantidade_venda += i.quantidade_gtin if i.gtin and i.quantidade_gtin else i.quantidade
+                p.vendas_liquidas += i.valor_liquido
+                p.receita_consumidor += r.atual.preco(i.valor_liquido)
+                p.tributos_venda_atual += r.atual.tributos
+                p.tributos_venda_ano += r.anos[ano].tributos
     for r in a.itens:
         if r.direcao == "entrada":
             resumo(r)

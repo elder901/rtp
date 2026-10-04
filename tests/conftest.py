@@ -32,6 +32,9 @@ class CalculadoraFake:
             n = nominais_por_ano[c.ano]
             if c.cclasstrib == "200003":
                 out[c] = AliquotaEfetiva(D(0), D(0), D(0), D(100))
+            elif c.cclasstrib == "200035":  # higiene e limpeza (Anexo VIII): redução de 60%
+                out[c] = AliquotaEfetiva(D(str(n["cbs"])) * D("0.4"), D(str(n["ibsEstadual"])) * D("0.4"),
+                                         D(str(n["ibsMunicipal"])) * D("0.4"), D(60))
             else:
                 out[c] = AliquotaEfetiva(D(str(n["cbs"])), D(str(n["ibsEstadual"])), D(str(n["ibsMunicipal"])), D(0))
         return out

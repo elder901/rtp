@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00"><NFe><infNFe Id="NFe31261012345678000195650010000123451000123456" versao="4.00">
+<ide><cUF>31</cUF><mod>65</mod><serie>1</serie><nNF>12345</nNF><dhEmi>2026-09-15T18:30:00-03:00</dhEmi><tpNF>1</tpNF></ide>
+<emit><CNPJ>12345678000195</CNPJ><xNome>SUPERMERCADO EXEMPLO LTDA</xNome><enderEmit><cMun>3103504</cMun><UF>MG</UF></enderEmit><CRT>3</CRT></emit>
+<det nItem="1"><prod><cProd>4512</cProd><cEAN>7899000000010</cEAN><xProd>PAPEL HIG FD 12RL</xProd><NCM>48181000</NCM><CFOP>5102</CFOP><uCom>PCT</uCom><qCom>10.0000</qCom><vUnCom>28.90</vUnCom><vProd>289.00</vProd><cEANTrib>7899000000010</cEANTrib><uTrib>PCT</uTrib><qTrib>10.0000</qTrib></prod>
+<imposto><ICMS><ICMS00><orig>0</orig><CST>00</CST><vBC>289.00</vBC><pICMS>18.00</pICMS><vICMS>52.02</vICMS></ICMS00></ICMS>
+<PIS><PISAliq><CST>01</CST><vBC>236.98</vBC><pPIS>1.65</pPIS><vPIS>3.91</vPIS></PISAliq></PIS>
+<COFINS><COFINSAliq><CST>01</CST><vBC>236.98</vBC><pCOFINS>7.60</pCOFINS><vCOFINS>18.01</vCOFINS></COFINSAliq></COFINS></imposto></det>
+</infNFe></NFe></nfeProc>

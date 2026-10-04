@@ -18,38 +18,60 @@
 
 <div class="card">
   <div class="indicadores">
-    <div class="indicador"><div class="rotulo">Vendas líquidas</div><div class="valor">{{ p.vendas_liquidas|brl if p.vendas_liquidas else '—' }}</div></div>
+    <div class="indicador"><div class="rotulo">Preço de venda (por {{ p.unidade_venda or 'unidade' }})</div><div class="valor">{{ p.preco_venda_unit|brl if p.preco_venda_unit else '—' }}</div></div>
     <div class="indicador"><div class="rotulo">Carga na venda: hoje → {{ ano }}</div>
       <div class="valor">{{ p.carga_venda_atual_pct|pct }} → {{ p.carga_venda_ano_pct|pct }}</div></div>
-    <div class="indicador"><div class="rotulo">Δ preço de venda (receita constante)</div><div class="valor">{{ var(p.variacao_preco_venda_pct) }}</div></div>
-    <div class="indicador"><div class="rotulo">Δ custo de compra</div><div class="valor">{{ var(p.variacao_custo_pct) if p.compras else '—' }}</div></div>
+    <div class="indicador"><div class="rotulo">Δ preço de venda (receita mantida)</div><div class="valor">{{ var(p.variacao_preco_venda_pct) }}</div></div>
+    <div class="indicador"><div class="rotulo">Δ custo de compra a preços de hoje</div><div class="valor">{{ var(p.variacao_custo_pct) if p.compras else '—' }}</div></div>
     <div class="indicador"><div class="rotulo">Economia escolhendo o melhor fornecedor</div>
       <div class="valor">{{ p.economia_possivel|brl if p.economia_possivel else '—' }}</div></div>
   </div>
 </div>
 
+{% set cenarios = p.cenarios_preco(ano) %}
+{% if cenarios %}
 <div class="card">
-  <h2>Fornecedores deste produto — custo efetivo unitário</h2>
+  <h2>Preço de venda e margem — por {{ p.unidade_venda }}, hoje × {{ ano }}</h2>
+  <p class="suave" style="margin-top:-6px">Combinações das duas decisões: manter o preço de gôndola ou a margem; o fornecedor
+    manter o preço de nota ou repassar a queda de tributos. Margem = valor líquido da venda − custo efetivo da compra.</p>
+  <div class="tabela"><table>
+    <tr><th class="txt">Cenário</th><th>Preço ao consumidor</th><th>Δ preço</th><th>Custo efetivo</th><th>Margem</th><th>Margem %</th><th>Δ margem</th></tr>
+    {% set base = cenarios[0] %}
+    {% for c in cenarios %}
+    <tr class="{{ 'destaque' if loop.first }}"><td class="txt">{{ c.nome if loop.first else c.nome ~ ' (' ~ ano ~ ')' }}</td>
+      <td>{{ c.preco|brl }}</td><td>{{ '—' if loop.first else var(((c.preco / base.preco - 1) * 100)|round(2)) }}</td>
+      <td>{{ c.custo|brl if c.custo is not none else '—' }}</td>
+      <td><b>{{ c.margem|brl if c.margem is not none else '—' }}</b></td><td>{{ c.margem_pct|pct }}</td>
+      <td>{% if not loop.first and c.margem is not none and base.margem is not none %}{% set d = c.margem - base.margem %}
+          <span class="{{ 'sobe' if d < 0 else 'desce' if d > 0 }}">{{ '+' if d > 0 }}{{ d|brl }}</span>{% else %}—{% endif %}</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Fornecedores deste produto — custo efetivo e preço de nota</h2>
   {% if not compras %}<p class="suave">Sem compras no período.</p>{% else %}
   <p class="suave" style="margin-top:-6px">Comparação só entre compras na mesma unidade. Barras: custo unitário hoje
-    (cinza) e em {{ ano }} (azul), na mesma escala.</p>
+    (cinza) e em {{ ano }} a preços de hoje (azul), na mesma escala.</p>
   <div class="tabela"><table>
-    <tr><th class="txt">Fornecedor</th><th class="txt">Regime</th><th class="txt">Un.</th><th>Qtd.</th><th>Preço unit. pago</th>
-        <th>Crédito unit. hoje</th><th>Crédito unit. {{ ano }}</th><th>Custo unit. hoje</th><th>Custo unit. {{ ano }}</th>
-        <th class="txt" style="min-width:160px">Hoje × {{ ano }}</th><th>Variação</th><th>Preço de equilíbrio</th></tr>
+    <tr><th class="txt">Fornecedor</th><th class="txt">Regime</th><th class="txt">Un.</th><th>Qtd.</th><th>Preço de nota unit.</th>
+        <th>Crédito unit. hoje</th><th>IS unit. {{ ano }}</th><th>Custo unit. hoje</th><th>Custo unit. {{ ano }} a preços de hoje</th>
+        <th class="txt" style="min-width:150px">Hoje × {{ ano }}</th><th>Variação</th><th>Preço de nota de equilíbrio</th><th>Δ preço de nota</th></tr>
     {% for c in compras %}
     <tr class="{{ 'destaque' if c.melhor is sameas c }}">
       <td class="txt"><a href="/empresas/{{ e.id }}/fornecedores/{{ c.fornecedor }}?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">{{ c.fornecedor_nome }}</a>
         {% if c.melhor is sameas c %}<span class="tag">melhor em {{ ano }}</span>{% endif %}<br><span class="suave">{{ c.fornecedor }}</span></td>
       <td class="txt">{{ nomes_regime.get(c.regime, c.regime) }}</td><td class="txt">{{ c.unidade }}</td><td>{{ c.quantidade|brl }}</td>
-      <td>{{ c.preco_unit|brl }}</td>
+      <td>{{ c.preco_nota_unit|brl }}</td>
       <td>{{ (c.creditos_atual / c.quantidade)|brl if c.quantidade else '—' }}</td>
-      <td>{{ (c.creditos_ano / c.quantidade)|brl if c.quantidade else '—' }}</td>
-      <td>{{ c.custo_unit_atual|brl }}</td><td><b>{{ c.custo_unit_ano|brl }}</b></td>
-      <td class="txt" title="Hoje {{ c.custo_unit_atual|brl }} · {{ ano }} {{ c.custo_unit_ano|brl }}">
+      <td title="{{ c.tratamento_is }}">{{ (c.imposto_seletivo_ano / c.quantidade)|brl if c.quantidade and c.imposto_seletivo_ano else '—' }}</td>
+      <td>{{ c.custo_unit_atual|brl }}</td><td><b>{{ c.custo_unit_precos_hoje|brl }}</b></td>
+      <td class="txt" title="Hoje {{ c.custo_unit_atual|brl }} · {{ ano }} {{ c.custo_unit_precos_hoje|brl }}">
         <div class="barra atual" style="width:{{ ((c.custo_unit_atual or 0) / maior * 100)|round(1) }}%"></div>
-        <div class="barra" style="width:{{ ((c.custo_unit_ano or 0) / maior * 100)|round(1) }}%; margin-top:2px"></div></td>
-      <td>{{ var(c.variacao_custo_pct) }}</td><td>{{ var(c.preco_equilibrio_pct, inverso=true) }}</td></tr>
+        <div class="barra" style="width:{{ ((c.custo_unit_precos_hoje or 0) / maior * 100)|round(1) }}%; margin-top:2px"></div></td>
+      <td>{{ var(c.variacao_custo_precos_hoje_pct) }}</td>
+      <td><b>{{ c.preco_nota_equilibrio_unit|brl }}</b></td><td>{{ var(c.variacao_preco_nota_equilibrio_pct, inverso=true) }}</td></tr>
     {% endfor %}
   </table></div>
   {% endif %}

@@ -166,10 +166,12 @@ def itens(a: Analise) -> list[dict]:
             "icms": r.item.v_icms + r.item.v_fcp, "icms_st": r.item.v_icms_st + r.item.v_fcp_st,
             "ipi": r.item.v_ipi, "pis": r.item.v_pis, "cofins": r.item.v_cofins,
             "tributos_atual": r.atual.tributos, "creditos_atual": r.atual.creditos,
+            "imposto_seletivo": r.imposto_seletivo,
         }
         for ano, v in r.anos.items():
             l[f"cbs_{ano}"] = v.cbs
             l[f"ibs_{ano}"] = v.ibs
+            l[f"is_{ano}"] = v.imposto_seletivo
             l[f"tributos_{ano}"] = v.tributos
             l[f"creditos_{ano}"] = v.creditos
         linhas.append(l)
@@ -188,6 +190,7 @@ def premissas(a: Analise) -> list[dict]:
         {"premissa": "Crédito de fornecedor do Simples (% do valor)", "valor": p.credito_fornecedor_simples_pct},
         {"premissa": "Crédito de fornecedor MEI (% do valor)", "valor": p.credito_fornecedor_mei_pct},
         {"premissa": "Indústria (credita IPI hoje)", "valor": "sim" if p.industria else "não"},
+        {"premissa": "IS embutido em compras de revendedor (% da alíquota)", "valor": p.repasse_is_revendedor_pct},
         {"premissa": "Calculadora RTC usada", "valor": a.versao_calculadora},
     ]
     if a.empresa.regime == "simples":

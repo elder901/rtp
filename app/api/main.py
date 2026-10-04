@@ -180,7 +180,7 @@ def salvar_dados(empresa_id: int, regime: str = Form(...), uf: str = Form(...), 
                  industria: bool = Form(False), manifestar_ciencia: bool = Form(False), ambiente_dfe: int = Form(1),
                  cbs_referencia: str = Form(""), ibs_uf_referencia: str = Form(""), ibs_mun_referencia: str = Form(""),
                  credito_fornecedor_simples_pct: str = Form(""), credito_fornecedor_mei_pct: str = Form(""),
-                 credito_presumido_nao_contribuinte_pct: str = Form(""),
+                 credito_presumido_nao_contribuinte_pct: str = Form(""), repasse_is_revendedor_pct: str = Form(""),
                  aliquota_das_pct: str = Form(""), das_pis_cofins_pct: str = Form(""),
                  das_icms_iss_pct: str = Form("")):
     if regime not in ("real", "presumido", "simples") or ambiente_dfe not in (1, 2):
@@ -195,6 +195,7 @@ def salvar_dados(empresa_id: int, regime: str = Form(...), uf: str = Form(...), 
                 ibs_mun_referencia=ibs_mun_referencia, credito_fornecedor_simples_pct=credito_fornecedor_simples_pct,
                 credito_fornecedor_mei_pct=credito_fornecedor_mei_pct,
                 credito_presumido_nao_contribuinte_pct=credito_presumido_nao_contribuinte_pct,
+                repasse_is_revendedor_pct=repasse_is_revendedor_pct,
                 aliquota_das_pct=aliquota_das_pct,
                 das_pis_cofins_pct=das_pis_cofins_pct, das_icms_iss_pct=das_icms_iss_pct))
         except InvalidOperation:
@@ -421,7 +422,7 @@ async def tela_fornecedores(request: Request, empresa_id: int, ano: int | None =
     return _render(request, "fornecedores.html", e=e, a=a, aba="fornecedores", ano=ano, fornecedores=lista,
                    inicio=inicio or "", fim=fim or "", regime=regime,
                    total_atual=sum((f.custo_atual for f in lista), negociacao.ZERO),
-                   total_ano=sum((f.custo_ano for f in lista), negociacao.ZERO))
+                   total_ano=sum((f.custo_precos_hoje for f in lista), negociacao.ZERO))
 
 
 @app.get("/empresas/{empresa_id}/fornecedores/{cnpj}", response_class=HTMLResponse)
@@ -459,8 +460,8 @@ async def tela_produto(request: Request, empresa_id: int, chave: str, ano: int |
     produto = next((p for p in negociacao.produtos(a, negociacao.compras(a, ano), ano) if p.chave == chave), None)
     if not produto:
         raise HTTPException(404, "Produto sem movimento no período")
-    compras = sorted(produto.compras, key=lambda c: (c.unidade, c.custo_unit_ano if c.custo_unit_ano is not None else 0))
-    maior = max((c.custo_unit_ano or 0 for c in compras), default=0) or 1
+    compras = sorted(produto.compras, key=lambda c: (c.unidade, c.custo_unit_precos_hoje or 0))
+    maior = max((max(c.custo_unit_atual or 0, c.custo_unit_precos_hoje or 0) for c in compras), default=0) or 1
     return _render(request, "produto.html", e=e, a=a, aba="produtos", ano=ano, p=produto, compras=compras,
                    maior=maior, inicio=inicio or "", fim=fim or "")
 

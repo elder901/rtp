@@ -45,7 +45,10 @@ def test_sem_credito_de_pis_cofins_em_compra_com_aliquota_zero(analise):
 def test_transicao_2027_mantem_icms(analise):
     v = _item(analise, "NB-01").anos[2027]
     assert v.cbs == (D("744.15") * D("8.7") / 100).quantize(D("0.01"))  # CBS - 0,1 p.p.
-    assert v.tributos == D("180.00") + v.cbs + v.ibs                    # ICMS integral; IPI/PIS/COFINS extintos
+    # ICMS integral, mas recalculado sobre o preço de nota de 2027: sem PIS/COFINS, o mesmo valor líquido (744,15)
+    # corresponde a uma nota de 744,15 / (1 - 0,18) = 907,50 -> ICMS 18% = 163,35. IPI/PIS/COFINS extintos.
+    assert v.tributos == D("163.35") + v.cbs + v.ibs
+    assert v.creditos == D("163.35") + v.cbs + v.ibs                   # crédito de ICMS acompanha a nota
 
 
 def test_entrada_fornecedor_simples_perde_credito(analise):

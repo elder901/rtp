@@ -67,20 +67,37 @@ Configurações em variáveis de ambiente ou `.env` — veja `.env.example`.
 - O servidor escuta só em `127.0.0.1`. Antes de expô-lo na rede, defina `RTP_USUARIO`/`RTP_SENHA` (login básico) e
   use HTTPS. Login por usuário e isolamento por cliente são a fase 4.
 
-## Fornecedores e produtos (negociação)
+## Imposto Seletivo (IS)
 
-Abas **Fornecedores** e **Produtos**, comparando hoje com o ano escolhido da transição (padrão 2027):
+Bebidas açucaradas e alcoólicas, fumo, bens minerais, veículos etc. As alíquotas vêm da base oficial da calculadora
+(ex.: refrigerante 10%; cerveja 3% em 2027 subindo a 20% em 2033; destilados 17–19%; cigarro 13% + R$ 2,13 por
+unidade). Só NCMs dos capítulos alcançados pela LC 214 são consultados.
 
-- **Custo efetivo** de compra = preço pago − créditos aproveitáveis, por fornecedor e por produto.
-- **Preço de equilíbrio**: variação do preço líquido do fornecedor que mantém o seu custo de hoje no ano analisado.
-  Tributos e créditos são proporcionais ao preço líquido, então é `custo hoje / custo no ano − 1`. Negativo = desconto
-  a negociar (típico de fornecedor do Simples, que transfere pouco crédito); positivo = folga para aceitar reajuste.
-- **Melhor fornecedor do mesmo produto** (mesmo EAN e mesma unidade) no ano e a **economia** se o volume fosse comprado
-  dele. Na tela do produto, todos os fornecedores lado a lado.
-- **Excel para negociação**: resumo por fornecedor e a planilha fornecedor × produto.
+- O IS é cobrado **uma vez, no fabricante** (cClassTrib IS 000001), identificado pelo CFOP de venda de produção própria
+  (x101, x401...). Ele **integra a base da CBS/IBS** e **não gera crédito**: na compra do fabricante entra no custo.
+- Na **revenda** (inclusive a venda do supermercado) o IS não incide (200007).
+- Em compras de **revendedor/distribuidor**, o IS foi cobrado antes e está embutido no preço: é estimado com a
+  alíquota oficial sobre o preço do revendedor × repasse (premissa, padrão 100% = limite superior).
+- As telas de fornecedor/produto e o Excel mostram o IS no custo de cada compra.
 
-As telas reaproveitam a mesma análise, que fica em cache e é recalculada só quando notas, classificações ou premissas
-mudam.
+## Fornecedores e produtos (negociação e preço)
+
+Abas **Fornecedores** e **Produtos**, comparando hoje com o ano escolhido da transição (padrão 2027). Custo efetivo de
+compra = preço pago − créditos aproveitáveis.
+
+- **Dois cenários de compra**: *a preços de hoje* (o fornecedor mantém o preço de nota — em 2027 o fim do PIS/COFINS
+  vira margem dele e o seu crédito cai de 9,25% para o da CBS) e *com repasse* (o fornecedor mantém o próprio valor
+  líquido e o preço de nota cai).
+- **Preço de nota de equilíbrio**: o preço de nota que mantém o seu custo de hoje no ano — o número a negociar
+  (ex.: papel higiênico comprado a R$ 20,00 em MG: R$ 18,15 em 2027, −9,25%; mantido o preço, o custo sobe 10,2%).
+- **Melhor fornecedor do mesmo EAN** (mesma unidade), a preços de hoje, e a economia se o volume fosse comprado dele.
+- **Preço de venda e margem por EAN**: preço ao consumidor, custo e margem unitários hoje e no ano, em quatro
+  combinações — manter a gôndola ou a margem; fornecedor mantém o preço ou repassa.
+- Os tributos que continuam na transição (ICMS, ST, IPI) são recalculados sobre o preço de nota de cada ano.
+- **Excel para negociação**: resumo por fornecedor e a planilha fornecedor × produto, com os dois cenários.
+
+As telas reaproveitam a mesma análise, que fica em cache e é recalculada só quando notas, classificações, premissas ou
+a base de regras mudam.
 
 ## Apuração assistida da CBS (API da Receita)
 
@@ -204,8 +221,8 @@ sinalizado. CSV: `chave;cst;cclasstrib` com chave `ean:...`, `cod:...` ou `ncm:.
 - Empresas do Simples: o DAS efetivo e sua repartição são premissas informadas (não há XML do DAS).
 - Preço neutro depende de EAN e unidade iguais na compra e na venda; usa o EAN/unidade tributável quando o XML traz
   `cEANTrib`, mas caixa × unidade sem `cEANTrib` não é convertida.
-- Imposto Seletivo não é calculado: a calculadora exige os dados do IS para NCMs sujeitos a ele (ex.: bebidas
-  açucaradas, 2202) e recusa o item, que fica com CBS/IBS zerado e alerta.
+- IS ad rem (parte fixa por unidade, ex.: cigarros) só entra quando a unidade da nota equivale à do IS (maço = VN);
+  senão fica de fora, com alerta. IS embutido em compras de revendedor é estimativa (premissa de repasse).
 - A API de apuração foi implementada pela documentação oficial e testada com respostas simuladas; a primeira
   solicitação real deve ser feita em produção restrita (piloto).
 - Só NF-e/NFC-e. CT-e e NFS-e entram depois.

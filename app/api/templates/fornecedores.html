@@ -10,16 +10,17 @@
 <div class="card" style="border-top-left-radius:0">
   {% include "_filtros.html" %}
   <p class="suave" style="margin-bottom:0"><b>Custo efetivo</b> = preço pago − créditos aproveitáveis.
-    <b>Preço de equilíbrio</b>: quanto o preço líquido do fornecedor pode variar para o seu custo em {{ ano }} ficar igual
-    ao de hoje — negativo é o desconto a negociar; positivo é a folga para aceitar reajuste.</p>
+    <b>A preços de hoje</b>: o fornecedor mantém o preço de nota (ex.: em 2027 o fim do PIS/COFINS vira margem dele e o seu
+    crédito cai de 9,25% para o da CBS). <b>Preço de nota de equilíbrio</b>: quanto o preço de nota precisa mudar para o seu
+    custo em {{ ano }} ficar igual ao de hoje — negativo é o desconto a negociar.</p>
 </div>
 
 <div class="card">
   <div class="indicadores">
     <div class="indicador"><div class="rotulo">Fornecedores</div><div class="valor">{{ fornecedores|length }}</div></div>
     <div class="indicador"><div class="rotulo">Custo efetivo hoje</div><div class="valor">{{ total_atual|brl }}</div></div>
-    <div class="indicador"><div class="rotulo">Custo efetivo em {{ ano }}</div><div class="valor">{{ total_ano|brl }}</div></div>
-    <div class="indicador"><div class="rotulo">Variação</div><div class="valor">
+    <div class="indicador"><div class="rotulo">Custo em {{ ano }} a preços de hoje</div><div class="valor">{{ total_ano|brl }}</div></div>
+    <div class="indicador"><div class="rotulo">Variação se ninguém mudar preço</div><div class="valor">
       {% set d = total_ano - total_atual %}<span class="{{ 'sobe' if d > 0 else 'desce' if d < 0 }}">{{ '+' if d > 0 }}{{ d|brl }}</span></div></div>
     <div class="indicador"><div class="rotulo">Fornecedores que encarecem</div>
       <div class="valor">{{ fornecedores|selectattr('variacao_custo', 'gt', 0)|list|length }}</div></div>
@@ -29,17 +30,17 @@
 <div class="card">
   <h2>Fornecedores — maiores aumentos de custo primeiro</h2>
   <div class="tabela"><table>
-    <tr><th class="txt">Fornecedor</th><th class="txt">Regime</th><th>Produtos</th><th>Notas</th><th>Valor líquido</th>
-        <th>Custo hoje</th><th>Custo {{ ano }}</th><th>Variação</th><th>Variação %</th>
-        <th title="Variação do preço líquido que mantém seu custo de hoje">Preço de equilíbrio</th>
-        <th title="Economia se os produtos com alternativa fossem comprados do melhor fornecedor do mesmo EAN">Economia trocando</th></tr>
+    <tr><th class="txt">Fornecedor</th><th class="txt">Regime</th><th>Produtos</th><th>Notas</th><th>Compras (preço de nota)</th>
+        <th>Custo hoje</th><th>Custo {{ ano }} a preços de hoje</th><th>Variação</th><th>Variação %</th>
+        <th title="Variação do preço de nota que mantém o seu custo de hoje">Preço de nota de equilíbrio</th>
+        <th title="A preços de hoje, se os produtos com alternativa fossem comprados do melhor fornecedor do mesmo EAN">Economia trocando</th></tr>
     {% for f in fornecedores %}
     <tr><td class="txt"><a href="/empresas/{{ e.id }}/fornecedores/{{ f.cnpj }}?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">{{ f.nome }}</a>
           <br><span class="suave">{{ f.cnpj }} · {{ f.uf }}</span></td>
         <td class="txt">{{ nomes_regime.get(f.regime, f.regime) }}</td><td>{{ f.produtos }}</td><td>{{ f.notas }}</td>
-        <td>{{ f.valor_liquido|brl }}</td><td>{{ f.custo_atual|brl }}</td><td>{{ f.custo_ano|brl }}</td>
+        <td>{{ f.preco_nota_atual|brl }}</td><td>{{ f.custo_atual|brl }}</td><td>{{ f.custo_precos_hoje|brl }}</td>
         <td>{% set d = f.variacao_custo %}<span class="{{ 'sobe' if d > 0 else 'desce' if d < 0 }}">{{ '+' if d > 0 }}{{ d|brl }}</span></td>
-        <td>{{ var(f.variacao_custo_pct) }}</td><td>{{ var(f.preco_equilibrio_pct, inverso=true) }}</td>
+        <td>{{ var(f.variacao_custo_pct) }}</td><td>{{ var(f.variacao_preco_nota_equilibrio_pct, inverso=true) }}</td>
         <td>{{ f.economia_trocando|brl if f.economia_trocando else '—' }}</td></tr>
     {% else %}<tr><td colspan="11" class="txt suave">Nenhuma compra no período.</td></tr>{% endfor %}
   </table></div>

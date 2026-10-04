@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00"><NFe><infNFe Id="NFe31261033444555000102550010000045671000045671" versao="4.00">
+<ide><cUF>31</cUF><mod>55</mod><serie>1</serie><nNF>4567</nNF><dhEmi>2026-09-08T09:00:00-03:00</dhEmi><tpNF>1</tpNF></ide>
+<emit><CNPJ>33444555000102</CNPJ><xNome>INDUSTRIA DE PAPEL EXEMPLO S.A.</xNome><enderEmit><cMun>3170206</cMun><UF>MG</UF></enderEmit><CRT>3</CRT></emit>
+<dest><CNPJ>12345678000195</CNPJ><xNome>SUPERMERCADO EXEMPLO LTDA</xNome><enderDest><cMun>3103504</cMun><UF>MG</UF></enderDest></dest>
+<det nItem="1"><prod><cProd>PH-12-FD</cProd><cEAN>7899000000010</cEAN><xProd>PAPEL HIGIENICO FOLHA DUPLA 12 ROLOS</xProd><NCM>48181000</NCM><CFOP>5101</CFOP><uCom>PCT</uCom><qCom>10.0000</qCom><vUnCom>20.00</vUnCom><vProd>200.00</vProd><cEANTrib>7899000000010</cEANTrib><uTrib>PCT</uTrib><qTrib>10.0000</qTrib></prod>
+<imposto><ICMS><ICMS00><orig>0</orig><CST>00</CST><vBC>200.00</vBC><pICMS>18.00</pICMS><vICMS>36.00</vICMS></ICMS00></ICMS>
+<PIS><PISAliq><CST>01</CST><vBC>164.00</vBC><pPIS>1.65</pPIS><vPIS>2.71</vPIS></PISAliq></PIS>
+<COFINS><COFINSAliq><CST>01</CST><vBC>164.00</vBC><pCOFINS>7.60</pCOFINS><vCOFINS>12.46</vCOFINS></COFINSAliq></COFINS>
+<IBSCBS><CST>200</CST><cClassTrib>200035</cClassTrib><gIBSCBS><vBC>148.83</vBC><vIBS>0.06</vIBS><gCBS><pCBS>0.90</pCBS><vCBS>0.54</vCBS></gCBS></gIBSCBS></IBSCBS></imposto></det>
+</infNFe></NFe></nfeProc>

@@ -19,7 +19,7 @@ from app.parser.nfe import Documento, ler_nfe
 from app.seguranca import cifrar, decifrar
 
 CAMPOS_PREMISSAS = ["cbs_referencia", "ibs_uf_referencia", "ibs_mun_referencia", "credito_fornecedor_simples_pct",
-                    "credito_fornecedor_mei_pct", "credito_presumido_nao_contribuinte_pct", "aliquota_das_pct", "das_pis_cofins_pct", "das_icms_iss_pct"]
+                    "credito_fornecedor_mei_pct", "credito_presumido_nao_contribuinte_pct", "repasse_is_revendedor_pct", "aliquota_das_pct", "das_pis_cofins_pct", "das_icms_iss_pct"]
 
 
 def so_digitos(s: str) -> str:

@@ -41,13 +41,17 @@ def test_custos_equilibrio_e_melhor_fornecedor(analise):
     compras = {(c.fornecedor, c.chave): c for c in negociacao.compras(analise, 2033)}
     regular = compras[("44555666000177", f"ean:{NOTEBOOK}")]
     simples = compras[("77888999000155", f"ean:{NOTEBOOK}")]
+    # Regime normal: hoje 1.000 de nota, custo 789,52. Em 2033, se mantiver a nota em 1.000, tudo vira valor líquido
+    # (sem ICMS/IPI/PIS/COFINS) e o custo é 1.000; com repasse, 744,15. Equilíbrio: nota de 789,52 (-21,05%).
     assert regular.custo_unit_atual == D("789.5200") and regular.custo_unit_ano == D("744.1500")
-    assert regular.preco_equilibrio_pct == D("6.10")             # folga para aceitar reajuste
-    assert simples.custo_unit_atual == D("862.1200")             # 950 - 9,25% de PIS/COFINS
-    assert simples.custo_unit_ano == D("912.0000")               # 950 - 4% (crédito do Simples, premissa)
-    assert simples.preco_equilibrio_pct == D("-5.47")            # desconto a negociar
-    assert regular.melhor is regular and simples.melhor is regular
-    assert simples.economia_trocando == D("167.85")
+    assert regular.custo_unit_precos_hoje == D("1000.0000") and regular.variacao_custo_precos_hoje_pct == D("26.66")
+    assert regular.preco_nota_equilibrio_unit == D("789.5200") and regular.variacao_preco_nota_equilibrio_pct == D("-21.05")
+    # Simples: preço não muda (DAS), crédito cai de 9,25% para 4% (premissa).
+    assert simples.custo_unit_atual == D("862.1200") and simples.custo_unit_precos_hoje == D("912.0000")
+    assert simples.variacao_preco_nota_equilibrio_pct == D("-5.47")
+    # A preços de hoje, em 2033 o fornecedor do Simples fica mais barato que o do regime normal
+    assert regular.melhor is simples and simples.melhor is simples
+    assert regular.economia_trocando == D("88.00")
     pote = compras[("77888999000155", "cod:POTE-10")]
     assert pote.melhor is None and pote.economia_trocando is None  # sem outro fornecedor
 
@@ -55,8 +59,8 @@ def test_custos_equilibrio_e_melhor_fornecedor(analise):
 def test_resumos(analise):
     lista = negociacao.compras(analise, 2033)
     forn = {f.cnpj: f for f in negociacao.fornecedores(lista)}
-    assert forn["77888999000155"].produtos == 2 and forn["77888999000155"].economia_trocando == D("167.85")
-    assert list(forn)[0] == "77888999000155"                      # maior aumento de custo primeiro
+    assert forn["44555666000177"].economia_trocando == D("88.00") and forn["77888999000155"].produtos == 2
+    assert list(forn)[0] == "44555666000177"                      # maior aumento de custo (a preços de hoje) primeiro
     prod = {p.chave: p for p in negociacao.produtos(analise, lista, 2033)}
     nb = prod[f"ean:{NOTEBOOK}"]
     assert nb.fornecedores == 2 and nb.vendas_liquidas == D("1197.90")
@@ -72,15 +76,15 @@ def test_telas_excel_e_cache(banco, monkeypatch):
         id_ = e.id
     c = TestClient(main.app)
     lista = c.get(f"/empresas/{id_}/fornecedores?ano=2033")
-    assert lista.status_code == 200 and "UTILIDADES PEQUENA ME" in lista.text and "Preço de equilíbrio" in lista.text
+    assert lista.status_code == 200 and "UTILIDADES PEQUENA ME" in lista.text and "Preço de nota de equilíbrio" in lista.text
     assert "MEI" in c.get(f"/empresas/{id_}/fornecedores?ano=2033&regime=simples").text  # filtro renderiza
     assert "sem outro fornecedor" in c.get(f"/empresas/{id_}/fornecedores/44555666000177?ano=2033").text
 
     # nova nota: o cache da análise precisa ser invalidado e o melhor fornecedor aparecer
     with db.sessao() as s:
         servicos.importar_arquivos(s, s.get(servicos.models.Empresa, id_), [("simples-nb.xml", _notebook_do_simples())])
-    detalhe = c.get(f"/empresas/{id_}/fornecedores/77888999000155?ano=2033")
-    assert "DISTRIBUIDORA EXEMPLO LTDA" in detalhe.text and "167,85" in detalhe.text
+    detalhe = c.get(f"/empresas/{id_}/fornecedores/44555666000177?ano=2033")
+    assert "UTILIDADES PEQUENA ME" in detalhe.text and "88,00" in detalhe.text
     produto = c.get(f"/empresas/{id_}/produtos/ean:{NOTEBOOK}?ano=2033")
     assert produto.status_code == 200 and "melhor em 2033" in produto.text
     assert "NOTEBOOK" in c.get(f"/empresas/{id_}/produtos?ano=2027").text
@@ -90,4 +94,4 @@ def test_telas_excel_e_cache(banco, monkeypatch):
     wb = load_workbook(BytesIO(xlsx.content))
     assert wb.sheetnames == ["Fornecedores", "Fornecedor x produto"]
     cab = [c.value for c in wb["Fornecedor x produto"][1]]
-    assert "melhor fornecedor" in cab and "economia trocando" in cab
+    assert "melhor fornecedor precos de hoje" in cab and "preco de nota equilibrio unit 2033" in cab
