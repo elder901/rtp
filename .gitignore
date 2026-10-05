@@ -5,3 +5,5 @@ __pycache__/
 *.db
 /dados/
 .env
+# código-fonte oficial da calculadora (sem licença explícita de redistribuição)
+/calculadora-rtc/

@@ -7,7 +7,7 @@
 {%- endmacro %}
 {% set nomes_regime = {'normal': 'Regime normal', 'simples': 'Simples Nacional', 'mei': 'MEI', 'nao_contribuinte': 'Não contribuinte'} %}
 {% block conteudo %}
-<div class="card" style="border-top-left-radius:0">
+<div class="card">
   <p style="margin-top:0"><a href="/empresas/{{ e.id }}/fornecedores?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">← Fornecedores</a></p>
   <h2 style="margin-bottom:2px">{{ f.nome }}</h2>
   <p class="suave" style="margin-top:0">{{ f.cnpj }} · {{ nomes_regime.get(f.regime, f.regime) }} · {{ f.uf }} · {{ f.notas }} nota(s) · {{ f.produtos }} produto(s)</p>

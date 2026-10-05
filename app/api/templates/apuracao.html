@@ -8,7 +8,7 @@
                   'ok': 'Valores iguais (tolerância de R$ 0,01)'} %}
 {% block conteudo %}
 <div class="colunas">
-  <div class="card" style="border-top-left-radius:0">
+  <div class="card">
     <h2>Credencial da API de apuração da CBS</h2>
     {% if credencial %}
       <p>Credencial gravada · ambiente <b>{{ 'Produção restrita (piloto)' if credencial.ambiente == 'prr' else 'Produção' }}</b>

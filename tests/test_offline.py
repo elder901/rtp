@@ -1,6 +1,7 @@
 import io
 import tarfile
 import zipfile
+from pathlib import Path
 
 import httpx
 import pytest
@@ -23,6 +24,11 @@ def _pacote_falso(caminho, versao=b"jar-v1"):
     with zipfile.ZipFile(caminho, "w") as z:
         z.writestr("calculadora.tar.gz", tar_bytes.getvalue())
         z.writestr("windows/1-instalar.bat", "wsl --import ...")
+        fonte = io.BytesIO()
+        with zipfile.ZipFile(fonte, "w") as f:
+            f.writestr("pom.xml", "<project/>")
+            f.writestr("src/main/java/br/gov/serpro/rtc/App.java", "class App {}")
+        z.writestr("codigo-fonte-backend.zip", fonte.getvalue())
     return caminho
 
 
@@ -48,6 +54,7 @@ def test_extrai_so_motor_e_base(tmp_path):
 def ambiente(tmp_path, monkeypatch):
     """Isola a pasta e simula processos: nada de Java nem rede."""
     monkeypatch.setattr(offline, "PASTA", tmp_path)
+    monkeypatch.setattr(offline, "PASTA_FONTE", tmp_path / "fonte")   # nunca toca a pasta real do projeto
     estado = {"rodando": {}, "proximo_pid": 100, "falha_ao_subir": set(), "divergencias": []}
 
     def iniciar(pasta, porta_api=offline.PORTA_API, porta_gestao=offline.PORTA_GESTAO):
@@ -130,3 +137,17 @@ def test_mantem_so_versao_atual_e_anterior(ambiente, tmp_path):
     versoes = sorted(d.name for d in (tmp_path / "versoes").iterdir())
     assert len(versoes) == 2 and versoes[-1].endswith("cccccccc") and any(v.endswith("bbbbbbbb") for v in versoes)
     assert offline.estado()["anterior"].endswith("bbbbbbbb")
+
+
+def test_extrai_codigo_fonte_e_registra_versao(ambiente, tmp_path):
+    ambiente["publicar"]("aaaaaaaa-1")
+    offline.atualizar(log=lambda m: None)
+    fonte = tmp_path / "fonte"
+    assert (fonte / "backend" / "pom.xml").exists()
+    assert (fonte / "backend/src/main/java/br/gov/serpro/rtc/App.java").exists()
+    leia = (fonte / "LEIA-ME.md").read_text(encoding="utf-8")
+    assert "V0059" in leia and "aaaaaaaa-1" in leia
+
+
+def test_testes_nao_tocam_a_pasta_real(ambiente):
+    assert offline.PASTA_FONTE != Path("calculadora-rtc")

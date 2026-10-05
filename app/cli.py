@@ -11,7 +11,7 @@
   python -m app.cli apuracao verificar [--cnpj ...]
   python -m app.cli apuracao importar --cnpj ... --arquivo retorno.json
   python -m app.cli apuracao conciliar --cnpj ... [--pa-inicio 2026-01] [--pa-fim 2026-03] [--saida conciliacao.xlsx]
-  python -m app.cli calculadora status | atualizar [--forcar] | iniciar | parar     (calculadora RTC local)
+  python -m app.cli calculadora status | atualizar [--forcar] | iniciar | parar | fonte   (calculadora RTC local)
   python -m app.cli analisar ...   (análise avulsa de uma pasta, sem gravar no banco)
 """
 from __future__ import annotations
@@ -210,6 +210,15 @@ def cmd_calculadora(a):
         elif a.acao == "parar":
             offline.parar_atual()
             print("Calculadora local parada.")
+        elif a.acao == "fonte":
+            zips = sorted((offline.PASTA / "pacotes").glob("calculadora-*.zip"))
+            if not zips:
+                sys.exit("Nenhum pacote baixado. Rode: python -m app.cli calculadora atualizar")
+            estado = offline.estado()
+            versao = {"versaoApp": estado.get("versao_app"), "versaoDb": estado.get("versao_base"),
+                      "dataVersaoDb": estado.get("data_base")}
+            pacote = offline.Pacote("", estado.get("etag", ""), estado.get("ultima_modificacao", ""), 0)
+            print(f"Código-fonte extraído em {offline.extrair_fonte(zips[-1], versao=versao, pacote=pacote).resolve()}")
     except offline.ErroOffline as erro:
         sys.exit(str(erro))
 
@@ -283,7 +292,7 @@ def main(argv: list[str] | None = None):
     pp.set_defaults(func=cmd_apuracao)
 
     pk = sub.add_parser("calculadora", help="calculadora RTC local: status, atualizar, iniciar, parar")
-    pk.add_argument("acao", choices=["status", "atualizar", "iniciar", "parar"])
+    pk.add_argument("acao", choices=["status", "atualizar", "iniciar", "parar", "fonte"])
     pk.add_argument("--forcar", action="store_true", help="atualizar mesmo sem versão nova ou com divergência")
     pk.set_defaults(func=cmd_calculadora)
 

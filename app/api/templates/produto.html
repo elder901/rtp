@@ -7,7 +7,7 @@
 {%- endmacro %}
 {% set nomes_regime = {'normal': 'Normal', 'simples': 'Simples', 'mei': 'MEI', 'nao_contribuinte': 'Não contribuinte'} %}
 {% block conteudo %}
-<div class="card" style="border-top-left-radius:0">
+<div class="card">
   <p style="margin-top:0"><a href="/empresas/{{ e.id }}/produtos?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">← Produtos</a></p>
   <h2 style="margin-bottom:2px">{{ p.descricao }}</h2>
   <p class="suave" style="margin-top:0">{{ ('EAN ' ~ p.gtin) if p.gtin else 'Sem EAN global' }} · códigos {{ p.codigos|join(', ') }} ·

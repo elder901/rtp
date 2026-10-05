@@ -31,6 +31,9 @@ from app.calculadora.client import CalculadoraRTC, Chave
 from app.engine.premissas import Premissas
 
 PASTA = Path("dados/calculadora")
+PASTA_FONTE = Path("calculadora-rtc")   # código-fonte oficial extraído (fora do git)
+FONTES = {"codigo-fonte-backend.zip": "backend", "codigo-fonte-simples-nacional.zip": "simples-nacional",
+          "scripts-python-exemplo.zip": "exemplos-python"}
 URL_PUBLICA = "https://consumo.tributos.gov.br/servico/calcular-tributos-consumo/api"
 PORTA_API, PORTA_GESTAO = 8080, 9101          # portas oficiais da calculadora offline
 PORTA_API_TESTE, PORTA_GESTAO_TESTE = 8090, 9191
@@ -111,6 +114,71 @@ def extrair(zip_oficial: Path, destino: Path) -> Path:
     faltando = set(ARQUIVOS) - encontrados
     if faltando:
         raise ErroOffline(f"Pacote oficial sem os arquivos esperados: {', '.join(sorted(faltando))}")
+    return destino
+
+
+def extrair_fonte(zip_oficial: Path, destino: Path | None = None, versao: dict | None = None,
+                  pacote: Pacote | None = None) -> Path:
+    """Extrai o código-fonte oficial (backend, Simples Nacional e exemplos em Python) para consulta e compilação,
+    substituindo a versão anterior, e escreve um LEIA-ME com a origem e a versão."""
+    import io
+
+    destino = destino or PASTA_FONTE
+    destino.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_oficial) as z:
+        for interno, pasta in FONTES.items():
+            if interno not in z.namelist():
+                continue
+            alvo = destino / pasta
+            if alvo.exists():
+                shutil.rmtree(alvo)
+            with zipfile.ZipFile(io.BytesIO(z.read(interno))) as fonte:
+                for info in fonte.infolist():  # protege contra caminhos fora da pasta (zip slip)
+                    caminho = (alvo / info.filename).resolve()
+                    if not str(caminho).startswith(str(alvo.resolve())):
+                        raise ErroOffline(f"Caminho inválido no pacote: {info.filename}")
+                fonte.extractall(alvo)
+    v = versao or {}
+    (destino / "LEIA-ME.md").write_text(f"""# Código-fonte da Calculadora de Tributos RTC (Receita Federal / SERPRO)
+
+Extraído sem alterações do pacote oficial distribuído pelo portal da Receita
+(`{URL_PUBLICA}/calculadora/download/url`, armazenamento do SERPRO).
+
+| | |
+|---|---|
+| Pacote | `calculadora.zip` publicado em {pacote.ultima_modificacao if pacote else '—'} (ETag `{pacote.etag if pacote else '—'}`) |
+| Aplicativo | {v.get('versaoApp', '—')} |
+| Base de regras | {v.get('versaoDb', '—')} de {v.get('dataVersaoDb', '—')} |
+| Extraído em | {datetime.now():%d/%m/%Y %H:%M} |
+
+## Conteúdo
+
+- `backend/` — motor de cálculo do regime geral (CBS, IBS, IS), Java 21 + Spring Boot (`pom.xml`, `src/`), com a
+  base de regras em `calculadora/db/calculadora-pro.db` (SQLite). É o que o RTP executa localmente
+  (`api-regime-geral.jar`).
+- `simples-nacional/` — API do Simples Nacional.
+- `exemplos-python/` — scripts de integração de exemplo publicados pela Receita.
+
+## Compilar
+
+Com Java 21 (o portátil está em `dados/calculadora/jre`):
+
+```bash
+cd backend
+./mvnw -DskipTests package
+```
+
+## Atualização
+
+Esta pasta é substituída automaticamente por `python -m app.cli calculadora atualizar` sempre que a calculadora
+local muda de versão (ou manualmente por `python -m app.cli calculadora fonte`).
+
+## Licença
+
+O pacote não traz arquivo de licença. A Receita Federal divulga a calculadora como código aberto e gratuito, mas, sem
+licença explícita, esta pasta fica fora do controle de versão do RTP (`.gitignore`) e não deve ser redistribuída sem
+verificação jurídica.
+""", encoding="utf-8")
     return destino
 
 
@@ -292,5 +360,6 @@ def atualizar(forcar: bool = False, log=print) -> bool:
     for z in (PASTA / "pacotes").glob("*.zip"):
         if z != zip_oficial:
             z.unlink(missing_ok=True)
-    log(f"Calculadora local atualizada e em uso em {url_local()}.")
+    extrair_fonte(zip_oficial, versao=versao_nova, pacote=remoto)
+    log(f"Calculadora local atualizada e em uso em {url_local()}; código-fonte em {PASTA_FONTE}/.")
     return True
