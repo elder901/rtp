@@ -7,10 +7,13 @@ compra muda depois dos créditos (entradas).
 """
 from __future__ import annotations
 
+import re
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from app.calculadora.client import AliquotaEfetiva, CalculadoraRTC, Chave
+from app.calculadora.client import AliquotaEfetiva, CalculadoraIndisponivel, CalculadoraRTC, Chave, ErroCalculadora
 from app.engine.premissas import TRANSICAO, Premissas
 from app.localidades import CODIGO_UF
 from app.parser.nfe import Documento, Item, Participante
@@ -20,7 +23,16 @@ PIS_COFINS_NAO_CUMULATIVO = Decimal("0.0925")
 # CST de PIS do fornecedor em que a aquisição não está sujeita à contribuição e por isso não gera crédito
 # (Lei 10.833/2003, art. 3º, § 2º, II): monofásico, ST, alíquota zero, isenção, sem incidência, suspensão.
 CST_PIS_SEM_CREDITO = {"04", "05", "06", "07", "08", "09"}
+# CST/CSOSN de ICMS com cobrança por substituição tributária na própria nota.
+CST_ICMS_COM_ST = {"10", "30", "70", "201", "202", "203"}
 CLASSIFICACAO_PADRAO = ("000", "000001")  # tributação integral
+# cClassTrib cuja aplicação depende do NCM estar no anexo da LC 214/2025 (conferido na calculadora, endpoint
+# ncm-aplicavel). Ordem: maior redução primeiro. Medicamentos (200009/200032) ficam de fora: dependem do registro
+# na Anvisa, não do NCM.
+ANEXOS_POR_NCM = (("200", "200003"),   # Anexo I: cesta básica nacional, redução de 100%
+                  ("200", "200014"),   # Anexo XV: hortícolas, frutas e ovos, redução de 100%
+                  ("200", "200034"),   # Anexo VII: alimentos destinados ao consumo humano, redução de 60%
+                  ("200", "200035"))   # Anexo VIII: higiene pessoal e limpeza, redução de 60%
 
 # CFOPs de venda de produção do próprio estabelecimento: quem vende é o fabricante, e é nele que o Imposto
 # Seletivo é cobrado (primeiro fornecimento). Nas revendas o IS já foi cobrado antes (cClassTrib IS 200007).
@@ -45,7 +57,7 @@ class Empresa:
 class Classificacao:
     cst: str
     cclasstrib: str
-    origem: str  # "manual" | "xml" | "padrao"
+    origem: str  # "manual" | "fornecedor" (o que os fornecedores declaram p/ o produto) | "xml" | "anexo" | "padrao"
 
 
 @dataclass
@@ -130,31 +142,106 @@ class Classificacoes:
         """Retorna ((cst, cClassTrib), chave usada) ou None."""
         if item.gtin and item.gtin in self.por_ean:
             return self.por_ean[item.gtin], f"ean:{item.gtin}"
-        if item.codigo in self.por_codigo:
+        if item.codigo_escopado in self.por_codigo:
+            return self.por_codigo[item.codigo_escopado], f"cod:{item.codigo_escopado}"
+        if item.codigo in self.por_codigo:          # ajuste antigo, sem o emitente: vale para o código de qualquer um
             return self.por_codigo[item.codigo], f"cod:{item.codigo}"
         if item.ncm in self.por_ncm:
             return self.por_ncm[item.ncm], f"ncm:{item.ncm}"
         return None
 
 
-def _classificar(item: Item, ajustes: Classificacoes) -> Classificacao:
+def _classificar(item: Item, ajustes: Classificacoes, anexos: dict[str, tuple[str, str]],
+                 xml_incompativeis: set[tuple[str, str]] = frozenset(),
+                 consenso: dict[str, tuple[str, str]] | None = None) -> Classificacao:
+    """Uma classificação por produto, a mesma na compra e na venda: ajuste manual → o que os fornecedores declaram
+    para o produto → XML do próprio item → anexo do NCM → padrão."""
     achado = ajustes.buscar(item)
     if achado:
         (cst, cct), _ = achado
         return Classificacao(cst, cct, "manual")
-    if item.ibscbs and item.ibscbs.cclasstrib:
+    if consenso and item.chave in consenso:
+        return Classificacao(*consenso[item.chave], "fornecedor")
+    if item.ibscbs and item.ibscbs.cclasstrib and (item.ibscbs.cclasstrib, item.ncm) not in xml_incompativeis:
         return Classificacao(item.ibscbs.cst, item.ibscbs.cclasstrib, "xml")
+    if item.ncm in anexos:
+        return Classificacao(*anexos[item.ncm], "anexo")
     return Classificacao(*CLASSIFICACAO_PADRAO, "padrao")
+
+
+def declaracoes_fornecedores(entradas, xml_incompativeis: set[tuple[str, str]]) -> dict[str, dict[tuple, Decimal]]:
+    """Por produto (EAN, ou código do fornecedor sem EAN): valor comprado por (CST, cClassTrib) declarado no grupo
+    IBSCBS das notas de compra, só os pares aceitos pela calculadora para o NCM."""
+    pesos: dict[str, dict[tuple, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
+    for it in entradas:
+        if it.ibscbs and it.ibscbs.cclasstrib and (it.ibscbs.cclasstrib, it.ncm) not in xml_incompativeis:
+            pesos[it.chave][(it.ibscbs.cst, it.ibscbs.cclasstrib)] += it.valor_operacao
+    return pesos
+
+
+def consenso_fornecedores(declaracoes: dict[str, dict[tuple, Decimal]]) -> dict[str, tuple[str, str]]:
+    """A classificação de cada produto pelos fornecedores: a de maior valor comprado quando divergem."""
+    return {k: max(v.items(), key=lambda kv: (kv[1], kv[0]))[0] for k, v in declaracoes.items() if v}
+
+
+def anexos_por_ncm(calculadora: CalculadoraRTC, ncms: set[str]) -> dict[str, tuple[str, str]]:
+    """NCM -> (CST, cClassTrib) do primeiro anexo de ANEXOS_POR_NCM em que a calculadora diz que o NCM se enquadra.
+
+    É uma presunção pelo NCM: alguns itens dos anexos também exigem descrição (ex.: tipo de leite, de farinha), por
+    isso a origem fica marcada como "anexo" e o produto pode ser ajustado na aba Classificação."""
+    if not hasattr(calculadora, "ncm_aplicavel"):
+        return {}
+
+    def testar(ncm: str):
+        for cst, cct in ANEXOS_POR_NCM:
+            try:
+                if calculadora.ncm_aplicavel(cct, ncm):
+                    return ncm, (cst, cct)
+            except CalculadoraIndisponivel:
+                raise
+            except ErroCalculadora:           # NCM fora da tabela vigente: a recusa aparece nos alertas do cálculo
+                return ncm, None
+        return ncm, None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return {ncm: c for ncm, c in pool.map(testar, sorted(ncms)) if c}
+
+
+def xml_incompativeis(calculadora: CalculadoraRTC, pares: set[tuple[str, str]]) -> set[tuple[str, str]]:
+    """Pares (cClassTrib, NCM) informados pelo fornecedor que a calculadora não aceita (ex.: cesta básica para um NCM
+    fora do Anexo I). Esses itens seguem para o anexo/padrão em vez de ficarem sem CBS/IBS."""
+    if not hasattr(calculadora, "ncm_aplicavel"):
+        return set()
+
+    def testar(par: tuple[str, str]):
+        cct, ncm = par
+        try:
+            return par, not calculadora.ncm_aplicavel(cct, ncm)
+        except CalculadoraIndisponivel:
+            raise
+        except ErroCalculadora:               # NCM fora da tabela vigente: a recusa aparece nos alertas do cálculo
+            return par, False
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return {par for par, ruim in pool.map(testar, sorted(pares)) if ruim}
 
 
 def _icms_total(i: Item) -> Decimal:
     return i.v_icms + i.v_fcp + i.v_icms_st + i.v_fcp_st
 
 
+def _icms_creditavel(i: Item, fornecedor: Participante) -> Decimal:
+    """ICMS da compra que o adquirente credita. Compra com ICMS-ST não dá crédito: o imposto da cadeia já foi cobrado
+    e o substituído revende sem débito (nem do ICMS próprio do fornecedor, nem do ST)."""
+    if i.v_icms_st > 0 or i.icms_cst in CST_ICMS_COM_ST:
+        return ZERO
+    return i.v_cred_icms_sn if fornecedor.regime in ("simples", "mei") else i.v_icms + i.v_fcp
+
+
 def _creditos_atuais(i: Item, empresa: Empresa, fornecedor: Participante, p: Premissas) -> Decimal:
     if empresa.regime == "simples":
         return ZERO
-    icms = i.v_cred_icms_sn if fornecedor.regime in ("simples", "mei") else i.v_icms + i.v_fcp
+    icms = _icms_creditavel(i, fornecedor)
     ipi = i.v_ipi if p.industria else ZERO
     if empresa.regime == "presumido":
         return icms + ipi
@@ -247,9 +334,11 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
              calculadora: CalculadoraRTC,
              overrides: "dict[str, tuple[str, str]] | Classificacoes | None" = None) -> Analise:
     overrides = Classificacoes.de(overrides)
+    if hasattr(calculadora, "versao"):
+        calculadora.versao()  # confere antes de processar: sem calculadora não há análise (CalculadoraIndisponivel)
     alertas: list[str] = []
     ignorados = 0
-    pendentes: list[tuple[str, Documento, Item, Participante, Classificacao]] = []
+    validos: list[tuple[str, Documento, Item, Participante]] = []
 
     for doc in documentos:
         direcao = doc.direcao_para(empresa.cnpj)
@@ -261,7 +350,30 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
             if item.cfop[-3:] not in CFOP_ONEROSOS:
                 ignorados += 1
                 continue
-            pendentes.append((direcao, doc, item, contraparte, _classificar(item, overrides)))
+            validos.append((direcao, doc, item, contraparte))
+
+    do_xml = {(it.ibscbs.cclasstrib, it.ncm) for _, _, it, _ in validos
+              if it.ibscbs and it.ibscbs.cclasstrib and not overrides.buscar(it)}
+    incompativeis = xml_incompativeis(calculadora, do_xml)
+    declaracoes = declaracoes_fornecedores((it for d, _, it, _ in validos if d == "entrada"), incompativeis)
+    consenso = consenso_fornecedores(declaracoes)
+    sem_classificacao = {it.ncm for _, _, it, _ in validos if not overrides.buscar(it) and it.chave not in consenso
+                         and not (it.ibscbs and it.ibscbs.cclasstrib
+                                  and (it.ibscbs.cclasstrib, it.ncm) not in incompativeis)}
+    anexos = anexos_por_ncm(calculadora, sem_classificacao)
+    pendentes = [(d, doc, it, c, _classificar(it, overrides, anexos, incompativeis, consenso))
+                 for d, doc, it, c in validos]
+    divergentes = sum(1 for v in declaracoes.values() if len(v) > 1)
+    if divergentes:
+        alertas.append(f"{divergentes} produto(s) com cClassTrib diferente entre fornecedores: usado o de maior valor "
+                       f"comprado, na compra e na venda. Confira a lista de conflitos na aba Classificação.")
+    if incompativeis:
+        afetados = [it for _, _, it, _, c in pendentes
+                    if it.ibscbs and (it.ibscbs.cclasstrib, it.ncm) in incompativeis and c.origem != "manual"]
+        exemplos = ", ".join(f"NCM {ncm} com {cct}" for cct, ncm in sorted(incompativeis, key=lambda p: p[1])[:6])
+        alertas.append(f"{len(afetados)} item(ns) com cClassTrib do XML incompatível com o NCM ({len(incompativeis)} "
+                       f"combinação(ões), recusadas pela calculadora oficial; ex.: {exemplos}): usada a classificação "
+                       f"pelo anexo ou o padrão. Vale avisar o fornecedor — a nota dele está com a classificação errada.")
 
     ncms_is: set[str] = set()
     if hasattr(calculadora, "imposto_seletivo"):
@@ -269,7 +381,9 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
             try:
                 if calculadora.imposto_seletivo(ncm):
                     ncms_is.add(ncm)
-            except Exception:  # noqa: BLE001 — sem a base oficial não dá para saber; avisa
+            except CalculadoraIndisponivel:
+                raise
+            except Exception:  # noqa: BLE001 — resposta inesperada para este NCM; avisa
                 alertas.append(f"Não foi possível verificar na calculadora se o NCM {ncm} tem Imposto Seletivo.")
     tratamento_is = {id(it): _tratamento_is(it, ncms_is) for _, _, it, _, _ in pendentes}
     chaves = {Chave(it.ncm, c.cst, c.cclasstrib, ano, *tratamento_is[id(it)])
@@ -314,8 +428,7 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
                     pct = {"simples": premissas.credito_fornecedor_simples_pct,
                            "mei": premissas.credito_fornecedor_mei_pct,
                            "nao_contribuinte": premissas.credito_presumido_nao_contribuinte_pct}[contraparte.regime]
-                    icms_residual = ((item.v_cred_icms_sn if contraparte.regime in ("simples", "mei")
-                                      else item.v_icms + item.v_fcp) * t.fator_icms_iss
+                    icms_residual = (_icms_creditavel(item, contraparte) * t.fator_icms_iss
                                      * escala_preco(item, ano)).quantize(Decimal("0.01"))
                     cred = (item.valor_liquido * pct / 100).quantize(Decimal("0.01")) + icms_residual
                 r.anos[ano] = ValoresCenario(tributos, cred, imposto_seletivo=valor_is)
@@ -325,7 +438,7 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
             cred = ZERO
             if direcao == "entrada" and empresa.regime != "simples":
                 # Crédito amplo de CBS/IBS + ICMS residual da transição.
-                cred = cbs + ibs + ((item.v_icms + item.v_fcp) * t.fator_icms_iss
+                cred = cbs + ibs + (_icms_creditavel(item, contraparte) * t.fator_icms_iss
                                     * escala_preco(item, ano)).quantize(Decimal("0.01"))
             r.anos[ano] = ValoresCenario(tributos, cred, cbs, ibs, valor_is)
         resultados.append(r)
@@ -361,9 +474,27 @@ def _alertas_gerais(resultados: list[ResultadoItem], empresa: Empresa, alertas: 
     if padrao:
         alertas.append(f"{len(padrao)} produto(s) sem cClassTrib no XML nem classificação manual: assumida "
                        f"tributação integral (CST 000 / 000001). Revise na aba Classificação.")
-    erros = {(r.item.ncm, r.classificacao.cclasstrib, a.erro) for r in resultados for a in r.aliquotas.values() if a.erro}
-    for ncm, cct, erro in sorted(erros):
-        alertas.append(f"Calculadora recusou NCM {ncm} / cClassTrib {cct}: {erro} — CBS/IBS desse item ficou zerado.")
+    por_anexo = defaultdict(set)
+    for r in resultados:
+        if r.classificacao.origem == "anexo":
+            por_anexo[r.classificacao.cclasstrib].add((r.item.codigo, r.item.ncm))
+    if por_anexo:
+        alertas.append(f"{sum(len(v) for v in por_anexo.values())} produto(s) classificado(s) pelo NCM nos anexos de "
+                       f"redução da LC 214 (" + ", ".join(f"{cct}: {len(v)}" for cct, v in sorted(por_anexo.items()))
+                       + "), conferido na calculadora oficial. Alguns itens dos anexos também exigem a descrição do "
+                       "produto: confira na aba Classificação.")
+    erros: dict[tuple[str, str, str], set[int]] = defaultdict(set)
+    for r in resultados:
+        for a in r.aliquotas.values():
+            if a.erro:
+                erros[(r.item.ncm, r.classificacao.cclasstrib, re.sub(r" para a data \d{4}-\d{2}-\d{2}", "", a.erro))].add(id(r))
+    for (ncm, cct, erro), itens in sorted(erros.items()):
+        if "NCM de código" in erro and "não encontrada" in erro:
+            alertas.append(f"NCM {ncm} não existe na tabela NCM vigente (código extinto ou desdobrado): {len(itens)} "
+                           f"item(ns) ficaram sem CBS/IBS. Corrija o NCM no cadastro do produto.")
+        else:
+            alertas.append(f"Calculadora recusou NCM {ncm} / cClassTrib {cct} em {len(itens)} item(ns): {erro} — "
+                           f"CBS/IBS desses itens ficou zerado.")
     mono = {r.item.ncm for r in resultados if r.classificacao.cclasstrib.startswith("62")}
     if mono:
         alertas.append(f"Itens com monofasia (combustíveis, NCM {', '.join(sorted(mono))}): cálculo ad rem não "

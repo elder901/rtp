@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.orm import Session
 
 from app import models
@@ -15,6 +15,7 @@ from app.dfe.certificado import CertificadoA1, CertificadoInvalido
 from app.engine.cenarios import Analise, Empresa, analisar
 from app.engine.premissas import Premissas
 from app.ingest.arquivos import iterar_xmls
+from app.ingest.consolidacao import MODELO_NFCE, ConsolidadorNFCe, MesNFCe, de_json, documento_do_mes, para_json
 from app.parser.nfe import Documento, ler_nfe
 from app.seguranca import cifrar, decifrar
 
@@ -126,6 +127,24 @@ def gravar_documento(s: Session, e: models.Empresa, doc: Documento, xml: bytes, 
     return "atualizado" if existente else "novo"
 
 
+def cancelar_documentos(s: Session, e: models.Empresa, chaves: set[str], origem: str) -> int:
+    """Marca as notas como canceladas (saem da análise). Chave ainda não importada fica registrada como cancelada,
+    para que a nota não entre depois."""
+    marcadas, lista = 0, sorted(chaves)
+    for i in range(0, len(lista), 500):
+        parte = lista[i:i + 500]
+        existentes = {r.chave: r for r in s.scalars(select(models.DocumentoFiscal).where(
+            models.DocumentoFiscal.empresa_id == e.id, models.DocumentoFiscal.chave.in_(parte)))}
+        for chave in parte:
+            reg = existentes.get(chave)
+            if reg is None:
+                s.add(models.DocumentoFiscal(empresa_id=e.id, chave=chave, origem=origem, situacao="cancelado"))
+            elif reg.situacao != "cancelado":
+                reg.situacao = "cancelado"
+                marcadas += 1
+    return marcadas
+
+
 def importar_arquivos(s: Session, e: models.Empresa, arquivos: list[tuple[str, bytes]]) -> ResultadoImportacao:
     res = ResultadoImportacao()
     for nome, xml in iterar_xmls(arquivos):
@@ -147,14 +166,64 @@ def importar_arquivos(s: Session, e: models.Empresa, arquivos: list[tuple[str, b
     return res
 
 
-def documentos(s: Session, e: models.Empresa, inicio: date | None = None, fim: date | None = None) -> list[Documento]:
-    q = select(models.DocumentoFiscal).where(models.DocumentoFiscal.empresa_id == e.id,
-                                             models.DocumentoFiscal.situacao == "completo")
+def gravar_consolidado_nfce(s: Session, e: models.Empresa, competencia: str, mes: MesNFCe, origem: str,
+                            cancelados: int = 0, ilegiveis: int = 0) -> models.ConsolidadoNFCe:
+    """Grava (ou substitui) o consolidado das NFC-e da empresa no mês AAAA-MM."""
+    reg = s.scalar(select(models.ConsolidadoNFCe).where(models.ConsolidadoNFCe.empresa_id == e.id,
+                                                        models.ConsolidadoNFCe.competencia == competencia))
+    reg = reg or models.ConsolidadoNFCe(empresa_id=e.id, competencia=competencia)
+    reg.origem, reg.cupons, reg.cancelados, reg.ilegiveis = origem[:40], mes.cupons, cancelados, ilegiveis
+    reg.valor, reg.itens_gz = mes.valor.quantize(Decimal("0.01")), para_json(mes)
+    s.add(reg)
+    return reg
+
+
+def _competencias(inicio: date | None, fim: date | None):
+    ini = f"{inicio.year}-{inicio.month:02d}" if inicio else "0000-00"
+    fim_ = f"{fim.year}-{fim.month:02d}" if fim else "9999-99"
+    return ini, fim_
+
+
+def documentos(s: Session, e: models.Empresa, inicio: date | None = None, fim: date | None = None,
+               consolidar_nfce: bool = True) -> list[Documento]:
+    """Documentos para análise. As NFC-e saem consolidadas por mês: as importadas do banco do PDV já gravadas assim
+    (ConsolidadoNFCe) e as gravadas cupom a cupom consolidadas na leitura (ConsolidadorNFCe), sem guardar os cupons na
+    memória. Mês com consolidado gravado ignora os cupons avulsos do mesmo mês (não conta duas vezes)."""
+    C, D = models.ConsolidadoNFCe, models.DocumentoFiscal
+    ini, fim_ = _competencias(inicio, fim)
+    consolidados = list(s.scalars(select(C).where(C.empresa_id == e.id, C.competencia >= ini, C.competencia <= fim_)
+                                  .order_by(C.competencia)))
+    q = select(D.id).where(D.empresa_id == e.id, D.situacao == "completo")
     if inicio:
-        q = q.where(models.DocumentoFiscal.emissao >= datetime.combine(inicio, time.min))
+        q = q.where(D.emissao >= datetime.combine(inicio, time.min))
     if fim:
-        q = q.where(models.DocumentoFiscal.emissao <= datetime.combine(fim, time.max))
-    return [ler_nfe(gzip.decompress(d.xml_gz), arquivo=d.chave) for d in s.scalars(q.order_by(models.DocumentoFiscal.emissao))]
+        q = q.where(D.emissao <= datetime.combine(fim, time.max))
+    if consolidar_nfce and consolidados:
+        e_nfce = func.substr(D.chave, 21, 2) == MODELO_NFCE          # modelo nas posições 21-22 da chave de acesso
+        meses = []
+        for c in consolidados:
+            ano, mes = int(c.competencia[:4]), int(c.competencia[5:])
+            meses.append(and_(D.emissao >= datetime(ano, mes, 1),
+                              D.emissao < datetime(ano + (mes == 12), mes % 12 + 1, 1)))
+        q = q.where(not_(and_(e_nfce, or_(*meses))))
+    # Ordena só os ids e lê os XMLs em blocos: ordenar as linhas já com o XML obriga o banco a montar uma ordenação
+    # temporária do tamanho dos XMLs do período (centenas de MB num mês de NFC-e).
+    ids = list(s.scalars(q.order_by(D.emissao, D.id)))
+    docs, nfce = [], ConsolidadorNFCe()
+    for i in range(0, len(ids), 500):
+        bloco = ids[i:i + 500]
+        xmls = {id_: (chave, xml_gz) for id_, chave, xml_gz in s.execute(
+            select(D.id, D.chave, D.xml_gz).where(D.id.in_(bloco)))}
+        for id_ in bloco:
+            chave, xml_gz = xmls[id_]
+            doc = ler_nfe(gzip.decompress(xml_gz), arquivo=chave)
+            if consolidar_nfce and doc.modelo == MODELO_NFCE:
+                nfce.adicionar(doc)
+            else:
+                docs.append(doc)
+    gravados = [documento_do_mes(e.cnpj, int(c.competencia[:4]), int(c.competencia[5:]), de_json(c.itens_gz))
+                for c in consolidados] if consolidar_nfce else []
+    return docs + nfce.documentos() + gravados
 
 
 def classificacoes(s: Session, e: models.Empresa) -> dict[str, tuple[str, str]]:

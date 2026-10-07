@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     # Ex.: https://rtp.bixdata.com.br   (sem ele, use a importação manual do JSON)
     url_publica: str = ""
 
+    # Banco do Flex (somente leitura) para importar direto: NFC-e do PDV (wrpdv, tabelas xmlpdv_MMAA) e NF-e do ERP
+    # (tabela xmlnfe). Ex.: postgresql://usuario:senha@servidor:5432/wrpdv
+    flex_pdv_url: str = ""
+    flex_erp_url: str = ""
+
     # Proteção mínima da interface web até a fase 4 (login multi-cliente). Vazio = sem senha.
     usuario: str = ""
     senha: str = ""

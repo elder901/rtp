@@ -74,7 +74,10 @@ class Premissas:
                 continue
             try:
                 oficial = calculadora.aliquota_oficial(esfera, data, codigo)
-            except Exception:  # noqa: BLE001 — calculadora fora do ar: mantém a premissa, com a origem indicada
+            except Exception as erro:  # noqa: BLE001
+                if type(erro).__name__ == "CalculadoraIndisponivel":
+                    raise
+                # resposta inesperada: mantém a premissa, com a origem indicada
                 origens[campo] = "premissa (calculadora indisponível)"
                 continue
             if oficial is not None:

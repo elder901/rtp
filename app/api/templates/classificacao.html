@@ -4,7 +4,10 @@
   <h2>Classificação tributária (CBS/IBS) por produto</h2>
   <p class="suave">Cada linha é um produto, identificado pelo <b>EAN</b> e reunindo compras e vendas; sem EAN válido
     (SEM GTIN, código de balança com prefixo 2), pelo código. Ordem usada no cálculo: <b>ajuste manual</b>
-    (EAN → código → NCM) → <b>grupo IBSCBS do XML</b> → <b>padrão 000/000001</b> (tributação integral).
+    (EAN → código → NCM) → <b>fornecedor</b> (o cClassTrib que os fornecedores declaram para o produto, o mesmo na compra
+    e na venda) → <b>grupo IBSCBS do XML</b> → <b>anexo</b> (NCM em anexo de redução da LC 214 — cesta
+    básica, hortifrúti, alimentos, higiene e limpeza —, conferido na calculadora) → <b>padrão 000/000001</b>
+    (tributação integral). Alguns itens dos anexos exigem também a descrição: confira os marcados como anexo.
     Preencha CST e cClassTrib só onde quiser ajustar; em branco remove o ajuste. Cada ajuste é conferido na
     Calculadora RTC ao salvar.</p>
   <div class="acoes">
@@ -24,6 +27,29 @@
   {% endif %}
 </div>
 
+{% if conflitos %}
+<div class="card">
+  <h2>Conflitos para revisar ({{ conflitos|length }})</h2>
+  <p class="suave">O motor usa uma classificação por produto, a mesma na compra e na venda: a que os fornecedores
+    declaram (a de maior valor quando divergem). Aqui estão os produtos em que ela diverge do anexo de redução do NCM ou
+    em que os fornecedores divergem entre si, ordenados pelo CBS/IBS a mais nas vendas (2033) com a classificação em
+    uso. Para mudar, ajuste o produto na tabela abaixo.
+    <a href="/empresas/{{ e.id }}/classificacao/conflitos.csv">Baixar a lista completa (CSV)</a></p>
+  <div class="tabela"><table>
+    <tr><th class="txt">Produto</th><th class="txt">EAN</th><th class="txt">NCM</th><th class="txt">Conflito</th>
+        <th class="txt">Em uso</th><th class="txt">Alternativa</th><th>Fornecedores</th><th>Vendas</th>
+        <th>CBS/IBS a mais (2033)</th></tr>
+    {% for c in conflitos[:30] %}
+    <tr><td class="txt quebra" data-rotulo="Produto">{{ c.descricao }}</td><td class="txt" data-rotulo="EAN">{{ c.gtin or '—' }}</td>
+        <td class="txt" data-rotulo="NCM">{{ c.ncm }}</td><td class="txt" data-rotulo="Conflito">{{ c.tipo }}</td>
+        <td class="txt" data-rotulo="Em uso">{{ c.em_uso|join('/') }}</td><td class="txt" data-rotulo="Alternativa">{{ c.alternativa|join('/') }}</td>
+        <td data-rotulo="Fornecedores">{{ c.participacao_pct }}%</td><td data-rotulo="Vendas">{{ c.valor_venda|brl }}</td>
+        <td data-rotulo="CBS/IBS a mais">{{ c.impacto_vendas|brl if c.impacto_vendas is not none else '—' }}</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endif %}
+
 {% if not situacoes %}<div class="alerta">Calculadora indisponível: a lista de códigos e a validação não puderam ser carregadas.</div>{% endif %}
 
 <form method="post" action="/empresas/{{ e.id }}/classificacao" class="card">
@@ -36,7 +62,7 @@
     {% set escopo = p.escopo_ajuste %}
     <tr data-origem="{{ p.origem }}" data-busca="{{ (p.gtin ~ ' ' ~ p.codigos|join(' ') ~ ' ' ~ p.descricao ~ ' ' ~ p.ncms|join(' '))|lower }}">
       <td class="txt quebra">{{ p.descricao }}<br><span class="suave">{{ p.codigos|join(', ') }}</span>
-        <input type="hidden" name="gtin" value="{{ p.gtin }}"><input type="hidden" name="codigo" value="{{ p.codigo }}">
+        <input type="hidden" name="gtin" value="{{ p.gtin }}"><input type="hidden" name="codigo" value="{{ p.codigo_escopado }}">
         <input type="hidden" name="ncm" value="{{ p.ncm }}"><input type="hidden" name="chave_atual" value="{{ p.chave_manual }}"></td>
       <td class="txt" style="font-family:monospace">{{ p.gtin or '—' }}</td>
       <td class="txt">{{ p.ncms|join(', ') }}{% if p.ncm_divergente %}<br><span class="sobe" title="Fornecedor e loja usam NCMs diferentes para o mesmo EAN">NCM divergente</span>{% endif %}</td>

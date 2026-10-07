@@ -4,6 +4,9 @@ O EAN liga a compra (código do fornecedor) e a venda (código da loja) do mesmo
 - "SEM GTIN" e códigos com dígito verificador inválido (cadastro errado);
 - códigos de circulação restrita (prefixo 2 no EAN-13/UPC-12, 0 ou 2 no EAN-8): balança, açougue, padaria —
   cada empresa usa os seus, então não identificam o mesmo produto entre fornecedor e loja.
+
+Sem EAN, o código só identifica o produto dentro do cadastro de quem emitiu a nota: o "001" de um fornecedor não é
+o "001" de outro. Por isso a chave por código leva a raiz do CNPJ do emitente (as filiais usam o mesmo cadastro).
 """
 from __future__ import annotations
 
@@ -34,11 +37,23 @@ def gtin_global(valor: str) -> str:
     return valor
 
 
-def chave_produto(gtin: str, codigo: str) -> str:
-    """Chave usada para agrupar o mesmo produto em compras e vendas."""
-    return f"ean:{gtin}" if gtin else f"cod:{codigo}"
+def raiz_emitente(documento: str) -> str:
+    """Raiz do CNPJ (8 dígitos); CPF inteiro."""
+    return documento[:8] if len(documento) == 14 else documento
+
+
+def codigo_escopado(emitente_raiz: str, codigo: str) -> str:
+    return f"{emitente_raiz}:{codigo}" if emitente_raiz else codigo
+
+
+def chave_produto(gtin: str, codigo: str, emitente_raiz: str = "") -> str:
+    """Chave usada para agrupar o mesmo produto em compras e vendas: ean:<GTIN> ou cod:<raiz do emitente>:<código>."""
+    return f"ean:{gtin}" if gtin else f"cod:{codigo_escopado(emitente_raiz, codigo)}"
 
 
 def rotulo_chave(chave: str) -> str:
     tipo, _, valor = chave.partition(":")
+    if tipo == "cod" and ":" in valor:
+        raiz, _, codigo = valor.partition(":")
+        return f"Código {codigo} (emitente {raiz})"
     return {"ean": "EAN", "cod": "Código", "ncm": "NCM"}.get(tipo, "") + f" {valor}"

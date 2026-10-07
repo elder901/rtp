@@ -11,7 +11,7 @@ from pathlib import Path
 
 from lxml import etree
 
-from app.produto import chave_produto, gtin_global
+from app.produto import chave_produto, codigo_escopado, gtin_global, raiz_emitente
 
 ZERO = Decimal("0")
 
@@ -88,6 +88,7 @@ class Item:
     gtin: str = ""
     unidade_gtin: str = ""
     quantidade_gtin: Decimal = ZERO
+    emitente_raiz: str = ""     # raiz do CNPJ de quem emitiu a nota: o código do produto é do cadastro dele
 
     @property
     def tributos_por_dentro(self) -> Decimal:
@@ -101,7 +102,11 @@ class Item:
 
     @property
     def chave(self) -> str:
-        return chave_produto(self.gtin, self.codigo)
+        return chave_produto(self.gtin, self.codigo, self.emitente_raiz)
+
+    @property
+    def codigo_escopado(self) -> str:
+        return codigo_escopado(self.emitente_raiz, self.codigo)
 
     @property
     def valor_operacao(self) -> Decimal:
@@ -256,6 +261,10 @@ def ler_nfe(conteudo: bytes, arquivo: str = "") -> Documento:
 
     ide = inf.find("ide")
     dh = _t(ide, "dhEmi") or _t(ide, "dEmi")
+    emitente = _participante(inf.find("emit"), com_crt=True)
+    itens = [_item(det) for det in inf.findall("det")]
+    for it in itens:
+        it.emitente_raiz = raiz_emitente(emitente.cnpj) if emitente else ""
     return Documento(
         chave=inf.get("Id", "").removeprefix("NFe"),
         modelo=_t(ide, "mod"),
@@ -263,9 +272,9 @@ def ler_nfe(conteudo: bytes, arquivo: str = "") -> Documento:
         serie=_t(ide, "serie"),
         emissao=datetime.fromisoformat(dh) if dh else datetime.min,
         tp_nf=_t(ide, "tpNF"),
-        emitente=_participante(inf.find("emit"), com_crt=True),
+        emitente=emitente,
         destinatario=_participante(inf.find("dest"), com_crt=False),
-        itens=[_item(det) for det in inf.findall("det")],
+        itens=itens,
         arquivo=arquivo,
     )
 

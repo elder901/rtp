@@ -208,6 +208,23 @@ def iniciar(pasta_versao: Path, porta_api: int = PORTA_API, porta_gestao: int = 
     return proc.pid
 
 
+def executar_primeiro_plano() -> int:
+    """Roda a versão instalada no terminal atual (log na tela, Ctrl+C encerra). É o jeito mais robusto de manter a
+    calculadora no ar: ela não depende de nenhum outro processo que possa ser encerrado."""
+    atual = estado()
+    if not atual.get("versao_dir"):
+        raise ErroOffline("Nenhuma versão instalada. Rode: python -m app.cli calculadora atualizar")
+    if saudavel():
+        raise ErroOffline(f"A calculadora já está no ar em {url_local()}.")
+    comando = [str(java().resolve()), "-Djava.net.preferIPv4Stack=true", "-jar", "api-regime-geral.jar",
+               "--spring.profiles.active=offline", f"--server.port={PORTA_API}",
+               f"--management.server.port={PORTA_GESTAO}"]
+    try:
+        return subprocess.run(comando, cwd=atual["versao_dir"]).returncode
+    except KeyboardInterrupt:
+        return 0
+
+
 def parar(pid: int | None):
     if not pid:
         return

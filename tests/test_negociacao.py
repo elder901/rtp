@@ -52,7 +52,7 @@ def test_custos_equilibrio_e_melhor_fornecedor(analise):
     # A preços de hoje, em 2033 o fornecedor do Simples fica mais barato que o do regime normal
     assert regular.melhor is simples and simples.melhor is simples
     assert regular.economia_trocando == D("88.00")
-    pote = compras[("77888999000155", "cod:POTE-10")]
+    pote = compras[("77888999000155", "cod:77888999:POTE-10")]
     assert pote.melhor is None and pote.economia_trocando is None  # sem outro fornecedor
 
 

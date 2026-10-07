@@ -43,8 +43,12 @@ class CalculadoraFake:
         return {"000": {"descricao": "Tributação integral", "classificacoes": {"000001": "Integral"}},
                 "200": {"descricao": "Alíquota reduzida", "classificacoes": {"200003": "Cesta básica"}}}
 
+    # NCMs dos anexos de redução que o fake conhece (arroz na cesta básica); fora dos anexos, sem restrição de NCM.
+    ANEXOS = {"200003": ("1006",), "200014": (), "200034": (), "200035": ()}
+
     def ncm_aplicavel(self, cclasstrib, ncm, data="2027-01-01"):
-        return not (cclasstrib == "200003" and not ncm.startswith("1006"))
+        prefixos = self.ANEXOS.get(cclasstrib)
+        return True if prefixos is None else ncm.startswith(prefixos)
 
     def versao(self):
         return {"versaoApp": "fake"}

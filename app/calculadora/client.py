@@ -11,6 +11,7 @@ e é sinalizada para tratamento à parte.
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -20,6 +21,7 @@ from app.config import settings
 
 BASE_REF = Decimal("1000")
 LOTE = 50
+PARALELO = 6
 
 
 # Capítulos NCM alcançados pelo Imposto Seletivo (LC 214/2025): preparações e bebidas (21, 22), fumo (24),
@@ -61,6 +63,11 @@ class ErroCalculadora(RuntimeError):
     pass
 
 
+class CalculadoraIndisponivel(ErroCalculadora):
+    """A calculadora não respondeu (fora do ar, porta fechada, tempo esgotado). Interrompe a análise: nunca se
+    calcula com CBS/IBS zerado por falta de comunicação."""
+
+
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v not in (None, "") else Decimal("0")
 
@@ -78,7 +85,7 @@ class CalculadoraRTC:
         try:
             r = self.http.get(f"{self.base_url}/calculadora/dados-abertos/{caminho}", params=params)
         except httpx.HTTPError as e:
-            raise ErroCalculadora(f"falha de comunicação com a calculadora: {e}") from e
+            raise CalculadoraIndisponivel(f"calculadora indisponível em {self.base_url}: {e}") from e
         if r.status_code != 200:
             raise ErroCalculadora(f"HTTP {r.status_code} em {caminho}: {r.text[:200]}")
         return r.json()
@@ -112,7 +119,7 @@ class CalculadoraRTC:
             try:
                 r = self.http.get(f"{self.base_url}/calculadora/dados-abertos/{caminho}", params={**params, "data": data})
             except httpx.HTTPError as e:
-                raise ErroCalculadora(f"falha de comunicação com a calculadora: {e}") from e
+                raise CalculadoraIndisponivel(f"calculadora indisponível em {self.base_url}: {e}") from e
             if r.status_code == 404:
                 self._cache_dados[chave] = None
             elif r.status_code != 200:
@@ -132,7 +139,7 @@ class CalculadoraRTC:
             try:
                 r = self.http.get(f"{self.base_url}/calculadora/dados-abertos/ncm", params={"ncm": ncm, "data": data})
             except httpx.HTTPError as e:
-                raise ErroCalculadora(f"falha de comunicação com a calculadora: {e}") from e
+                raise CalculadoraIndisponivel(f"calculadora indisponível em {self.base_url}: {e}") from e
             info = r.json() if r.status_code == 200 else {}
             self._cache_dados[chave] = info if info.get("tributadoPeloImpostoSeletivo") else None
         return self._cache_dados[chave]
@@ -168,9 +175,16 @@ class CalculadoraRTC:
         por_ano: dict[int, list[Chave]] = {}
         for c in faltantes:
             por_ano.setdefault(c.ano, []).append(c)
-        for ano, lista in por_ano.items():
-            for i in range(0, len(lista), LOTE):
-                self._consultar_lote(lista[i:i + LOTE], ano, nominais_por_ano[ano], uf, municipio)
+        lotes = [(lista[i:i + LOTE], ano) for ano, lista in por_ano.items() for i in range(0, len(lista), LOTE)]
+        if len(lotes) <= 1:
+            for lote, ano in lotes:
+                self._consultar_lote(lote, ano, nominais_por_ano[ano], uf, municipio)
+        else:
+            # Lotes independentes em paralelo (a calculadora atende várias requisições ao mesmo tempo).
+            with ThreadPoolExecutor(max_workers=PARALELO) as pool:
+                for _ in pool.map(lambda la: self._consultar_lote(la[0], la[1], nominais_por_ano[la[1]], uf, municipio),
+                                  lotes):
+                    pass
         return {c: self._cache[k(c)] for c in chaves}
 
     def _consultar_lote(self, lote: list[Chave], ano: int, nominais: dict, uf: str, municipio: int):
@@ -179,14 +193,18 @@ class CalculadoraRTC:
             resultado = self._regime_geral(lote, ano, nominais, uf, municipio)
             for chave, obj in zip(lote, resultado):
                 self._cache[(chave, assinatura)] = obj
+        except CalculadoraIndisponivel:
+            raise
         except ErroCalculadora as e:
             if len(lote) == 1:
                 self._cache[(lote[0], assinatura)] = AliquotaEfetiva(Decimal(0), Decimal(0), Decimal(0), Decimal(0),
                                                                      erro=str(e))
                 return
-            # Um item inválido derruba o lote inteiro: refaz um a um para isolar o erro.
-            for chave in lote:
-                self._consultar_lote([chave], ano, nominais, uf, municipio)
+            # Um item inválido derruba o lote inteiro: divide ao meio até isolar os recusados (poucas chamadas a mais,
+            # em vez de refazer item a item — importante com NCMs antigos que deixaram de existir).
+            meio = len(lote) // 2
+            self._consultar_lote(lote[:meio], ano, nominais, uf, municipio)
+            self._consultar_lote(lote[meio:], ano, nominais, uf, municipio)
 
     def _regime_geral(self, lote: list[Chave], ano: int, nominais: dict, uf: str, municipio: int):
         payload = {
@@ -201,7 +219,9 @@ class CalculadoraRTC:
         try:
             r = self.http.post(f"{self.base_url}/calculadora/regime-geral", json=payload)
         except httpx.HTTPError as e:
-            raise ErroCalculadora(f"falha de comunicação com a calculadora: {e}") from e
+            raise CalculadoraIndisponivel(f"calculadora indisponível em {self.base_url}: {e}") from e
+        if r.status_code >= 500:
+            raise CalculadoraIndisponivel(f"calculadora com erro interno (HTTP {r.status_code}) em {self.base_url}")
         if r.status_code != 200:
             try:
                 detalhe = r.json().get("detail") or r.text

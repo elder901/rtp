@@ -52,6 +52,8 @@ def test_fluxo_completo(banco, monkeypatch):
 
     csv = c.get(url + "/classificacao.csv").text
     assert "ean:7890000000024;200;200003" in csv
+    conflitos = c.get(url + "/classificacao/conflitos.csv")
+    assert conflitos.status_code == 200 and conflitos.text.lstrip("﻿").startswith("chave;ean;descricao;ncm;tipo")
 
     painel = c.get(url + "/analise?anos=2027,2033")
     assert painel.status_code == 200

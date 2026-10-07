@@ -83,6 +83,24 @@ class DocumentoFiscal(Base):
     criado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class ConsolidadoNFCe(Base):
+    """NFC-e de um mês consolidadas por produto e tratamento fiscal (ingest/consolidacao.py). Guardar cada cupom
+    custaria centenas de MB por loja e mês; a análise só usa as somas. A fonte (XML de cada cupom) fica no PDV."""
+    __tablename__ = "consolidado_nfce"
+    __table_args__ = (UniqueConstraint("empresa_id", "competencia"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    empresa_id: Mapped[int] = mapped_column(ForeignKey("empresa.id"), index=True)
+    competencia: Mapped[str] = mapped_column(String(7))        # AAAA-MM
+    origem: Mapped[str] = mapped_column(String(40))            # ex.: wrpdv:xmlpdv_0926/001
+    cupons: Mapped[int] = mapped_column(Integer)                # válidos consolidados
+    cancelados: Mapped[int] = mapped_column(Integer, default=0)
+    ilegiveis: Mapped[int] = mapped_column(Integer, default=0)
+    valor: Mapped[Decimal] = mapped_column(Numeric(15, 2), default=0)  # soma do valor dos itens
+    itens_gz: Mapped[bytes] = mapped_column(LargeBinary)       # JSON compactado (consolidacao.para_json)
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
 class ClassificacaoProduto(Base):
     """Classificação manual de CBS/IBS por código de produto ou NCM (código tem prioridade)."""
     __tablename__ = "classificacao"

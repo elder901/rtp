@@ -14,7 +14,7 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 from datetime import date
-from decimal import InvalidOperation
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -26,11 +26,12 @@ from sqlalchemy import case, func, select
 
 from app import classificacao as classif
 from app import db, models, servicos
+from app.engine.cenarios import anexos_por_ncm, consenso_fornecedores, declaracoes_fornecedores, xml_incompativeis
 from app.api.grafico import linha_do_tempo
 from app.apuracao import conciliacao
 from app.apuracao import servico as apuracao
 from app.apuracao.cliente import ErroApuracao
-from app.calculadora.client import CalculadoraRTC, ErroCalculadora
+from app.calculadora.client import CalculadoraIndisponivel, CalculadoraRTC, ErroCalculadora
 from app.config import settings
 from app.dfe.certificado import CertificadoInvalido
 from app.dfe.sincronizar import sincronizar, sincronizar_pendentes
@@ -251,14 +252,36 @@ def _chave_do_ajuste(escopo: str, gtin: str, codigo: str, ncm: str) -> str:
     return f"cod:{codigo}"
 
 
+def _base_classificacao(s, e: models.Empresa):
+    """Documentos e as peças da classificação do motor: anexos por NCM, pares do XML recusados e o que os
+    fornecedores declaram por produto. Sem a calculadora a tela abre sem anexo e sem a checagem dos pares."""
+    docs = servicos.documentos(s, e)
+    try:
+        anexos = anexos_por_ncm(calculadora, {it.ncm for d in docs for it in d.itens})
+        incompativeis = xml_incompativeis(calculadora, {(it.ibscbs.cclasstrib, it.ncm) for d in docs for it in d.itens
+                                                         if it.ibscbs and it.ibscbs.cclasstrib})
+    except ErroCalculadora:
+        anexos, incompativeis = {}, set()
+    entradas = (it for d in docs if d.direcao_para(e.cnpj) == "entrada" for it in d.itens)
+    return docs, anexos, incompativeis, declaracoes_fornecedores(entradas, incompativeis)
+
+
+def _produtos_classificacao(s, e: models.Empresa, ajustes: dict):
+    """Produtos para revisão com a mesma classificação que o motor usa, e a lista de conflitos."""
+    docs, anexos, incompativeis, declaracoes = _base_classificacao(s, e)
+    premissas = servicos.premissas_da_empresa(e)
+    aliquota = Decimal(str(premissas.cbs_referencia + premissas.ibs_uf_referencia + premissas.ibs_mun_referencia))
+    produtos = classif.produtos(docs, e.cnpj, ajustes, anexos, incompativeis, consenso_fornecedores(declaracoes))
+    return produtos, classif.conflitos(docs, e.cnpj, ajustes, anexos, declaracoes, aliquota)
+
+
 @app.get("/empresas/{empresa_id}/classificacao", response_class=HTMLResponse)
 def tela_classificacao(request: Request, empresa_id: int):
     with db.sessao() as s:
         e = _carregar(s, empresa_id)
         registros = {c.chave: c for c in s.scalars(select(models.ClassificacaoProduto)
                                                    .where(models.ClassificacaoProduto.empresa_id == e.id))}
-        produtos = classif.produtos(servicos.documentos(s, e), e.cnpj,
-                                    {k: (v.cst, v.cclasstrib) for k, v in registros.items()})
+        produtos, conflitos = _produtos_classificacao(s, e, {k: (v.cst, v.cclasstrib) for k, v in registros.items()})
     validacoes = {}
     for p in produtos:
         reg = None
@@ -271,6 +294,7 @@ def tela_classificacao(request: Request, empresa_id: int):
         situacoes = {}
     return _render(request, "classificacao.html", e=e, produtos=produtos, validacoes=validacoes,
                    situacoes=situacoes, sugestoes_ean=sum(1 for p in produtos if p.sugestao_por_ean),
+                   conflitos=conflitos,
                    avisos=AVISOS.pop(e.id, []), aba="classificacao")
 
 
@@ -335,7 +359,7 @@ async def aplicar_sugestoes_ean(empresa_id: int):
 def exportar_classificacao(empresa_id: int):
     with db.sessao() as s:
         e = _carregar(s, empresa_id)
-        produtos = classif.produtos(servicos.documentos(s, e), e.cnpj, servicos.classificacoes(s, e))
+        produtos, _ = _produtos_classificacao(s, e, servicos.classificacoes(s, e))
     saida = io.StringIO()
     w = csv.writer(saida, delimiter=";")
     w.writerow(["chave", "cst", "cclasstrib", "descricao", "ean", "codigos", "ncm", "operacoes", "origem_atual",
@@ -347,6 +371,25 @@ def exportar_classificacao(empresa_id: int):
                     "/".join(p.sugestao) if p.sugestao else ""])
     return Response(saida.getvalue().encode("utf-8-sig"), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="classificacao_{e.cnpj}.csv"'})
+
+
+@app.get("/empresas/{empresa_id}/classificacao/conflitos.csv")
+def exportar_conflitos(empresa_id: int):
+    """Produtos em que a classificação usada diverge do anexo do NCM ou entre fornecedores, para o tributário revisar."""
+    with db.sessao() as s:
+        e = _carregar(s, empresa_id)
+        _, conflitos = _produtos_classificacao(s, e, servicos.classificacoes(s, e))
+    saida = io.StringIO()
+    w = csv.writer(saida, delimiter=";")
+    w.writerow(["chave", "ean", "descricao", "ncm", "tipo", "em_uso", "alternativa", "participacao_em_uso_pct",
+                "valor_compra", "valor_venda_liquido", "cbs_ibs_a_mais_nas_vendas_2033"])
+    for c in conflitos:
+        w.writerow([c.chave, c.gtin, c.descricao, c.ncm, c.tipo, "/".join(c.em_uso), "/".join(c.alternativa),
+                    str(c.participacao_pct).replace(".", ","), str(c.valor_compra).replace(".", ","),
+                    str(c.valor_venda).replace(".", ","),
+                    "" if c.impacto_vendas is None else str(c.impacto_vendas).replace(".", ",")])
+    return Response(saida.getvalue().encode("utf-8-sig"), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="conflitos_{e.cnpj}.csv"'})
 
 
 @app.post("/empresas/{empresa_id}/classificacao/csv")
@@ -386,12 +429,26 @@ def _assinatura_dos_dados(s, e: models.Empresa) -> tuple:
                      .where(models.DocumentoFiscal.empresa_id == e.id)).one()
     classes = s.execute(select(func.count(), func.max(models.ClassificacaoProduto.atualizado_em))
                         .where(models.ClassificacaoProduto.empresa_id == e.id)).one()
-    return (tuple(docs), tuple(classes), json.dumps(e.premissas or {}, sort_keys=True), e.regime, e.industria,
+    nfce = s.execute(select(func.count(), func.max(models.ConsolidadoNFCe.atualizado_em), func.sum(
+        models.ConsolidadoNFCe.cupons)).where(models.ConsolidadoNFCe.empresa_id == e.id)).one()
+    return (tuple(docs), tuple(classes), tuple(nfce), json.dumps(e.premissas or {}, sort_keys=True), e.regime, e.industria,
             e.uf, e.cod_municipio, settings.calculadora_url,
             calculadora.identificacao().get("versao_base"))  # nova base de regras (ex.: alíquotas publicadas)
 
 
 def _analise(empresa_id: int, inicio: date | None, fim: date | None):
+    try:
+        return _analise_sem_tratamento(empresa_id, inicio, fim)
+    except CalculadoraIndisponivel:
+        _garantir_calculadora_local()          # tenta subir a calculadora local uma vez
+        try:
+            return _analise_sem_tratamento(empresa_id, inicio, fim)
+        except CalculadoraIndisponivel as erro:
+            raise HTTPException(503, f"{erro}. A análise não foi feita para não calcular sem a calculadora oficial. "
+                                     f"Inicie-a com: python -m app.cli calculadora executar") from erro
+
+
+def _analise_sem_tratamento(empresa_id: int, inicio: date | None, fim: date | None):
     with db.sessao() as s:
         e = _carregar(s, empresa_id)
         chave = (empresa_id, inicio, fim)

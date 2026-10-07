@@ -6,6 +6,7 @@ import pytest
 from app.engine.cenarios import Empresa, analisar
 from app.engine.premissas import Premissas
 from app.ingest.arquivos import ler_caminho
+from app.parser.nfe import ler_nfe
 from app.relatorios import agregacao
 from app.relatorios.excel import exportar
 from tests.conftest import CalculadoraFake
@@ -65,7 +66,7 @@ def test_saida_classificacao_manual_e_cfop_ignorado(analise):
     assert analise.ignorados == 1
     assert not any(r.item.codigo == "BRINDE" for r in analise.itens)
     nb = _item(analise, "V-NB01")
-    assert nb.classificacao.origem == "padrao"
+    assert nb.classificacao.origem == "fornecedor"      # o fornecedor declara 000001 para o mesmo EAN
     assert nb.anos[2033].tributos == D("105.42") + D("212.03")
 
 
@@ -101,3 +102,70 @@ def test_versao_da_calculadora_registrada(analise):
     assert analise.versao_calculadora.startswith("app 1.0-teste · base de regras V0000")
     premissas = {l["premissa"]: l["valor"] for l in agregacao.premissas(analise)}
     assert "V0000" in premissas["Calculadora RTC usada"]
+
+
+def test_ncm_em_anexo_de_reducao_e_classificado_pela_calculadora():
+    so_vendas = [d for d in ler_caminho(FX).documentos if d.emitente.cnpj == "11222333000181"]
+    a = analisar(Empresa("11222333000181", "LOJA", "real", "SP", 3550308), so_vendas, Premissas(anos=[2033]),
+                 CalculadoraFake())
+    arroz = _item(a, "V-ARZ5")                        # sem compra do produto, sem cClassTrib no XML nem ajuste
+    c = arroz.classificacao
+    assert (c.cst, c.cclasstrib, c.origem) == ("200", "200003", "anexo")
+    assert arroz.anos[2033].tributos == D("0")
+    assert _item(a, "V-NB01").classificacao.origem == "padrao"   # notebook não está em anexo
+    assert any("classificado(s) pelo NCM nos anexos" in t for t in a.alertas)
+
+
+def test_mesma_classificacao_na_compra_e_na_venda_pelo_que_o_fornecedor_declara():
+    a = analisar(Empresa("11222333000181", "LOJA", "real", "SP", 3550308), ler_caminho(FX).documentos,
+                 Premissas(anos=[2033]), CalculadoraFake())
+    compra, venda = _item(a, "ARZ-5"), _item(a, "V-ARZ5")          # mesmo EAN, códigos diferentes
+    assert compra.classificacao == venda.classificacao
+    assert (venda.classificacao.cclasstrib, venda.classificacao.origem) == ("200003", "fornecedor")
+
+
+def test_ncm_fora_da_tabela_vigente_gera_um_alerta_por_ncm():
+    from app.calculadora.client import AliquotaEfetiva
+
+    class NcmExtinto(CalculadoraFake):
+        def aliquotas(self, chaves, nominais_por_ano, uf, municipio):
+            out = super().aliquotas(chaves, nominais_por_ano, uf, municipio)
+            for c in out:
+                if c.ncm == "84713012":
+                    out[c] = AliquotaEfetiva(D(0), D(0), D(0), D(0), erro=f"HTTP 404: NCM de código {c.ncm} não "
+                                                                          f"encontrada para a data {c.ano}-01-15")
+            return out
+
+    docs = ler_caminho(FX).documentos
+    a = analisar(Empresa("11222333000181", "LOJA", "real", "SP", 3550308), docs, Premissas(anos=[2027, 2033]),
+                 NcmExtinto())
+    avisos = [t for t in a.alertas if "84713012" in t]
+    assert len(avisos) == 1 and "não existe na tabela NCM vigente" in avisos[0] and "2 item(ns)" in avisos[0]
+
+
+def test_compra_com_icms_st_nao_da_credito_de_icms():
+    xml = (FX / "entrada_fornecedor_normal.xml").read_text(encoding="utf-8").replace(
+        "<ICMS00><orig>0</orig><CST>00</CST><vBC>1000.00</vBC><pICMS>18.00</pICMS><vICMS>180.00</vICMS></ICMS00>",
+        "<ICMS10><orig>0</orig><CST>10</CST><vBC>1000.00</vBC><pICMS>18.00</pICMS><vICMS>180.00</vICMS>"
+        "<vBCST>1400.00</vBCST><pICMSST>18.00</pICMSST><vICMSST>72.00</vICMSST></ICMS10>")
+    doc = ler_nfe(xml.encode())
+    a = analisar(Empresa("11222333000181", "LOJA", "real", "SP", 3550308), [doc], Premissas(anos=[2027, 2033]),
+                 CalculadoraFake())
+    nb = _item(a, "NB-01")
+    assert nb.item.v_icms_st == D("72.00")
+    assert nb.atual.creditos == D("80.48")             # só PIS/COFINS: o ICMS próprio e o ST não se creditam
+    v = nb.anos[2027]
+    assert v.creditos == v.cbs + v.ibs                 # nem o ICMS residual da transição
+
+
+def test_cclasstrib_do_xml_incompativel_com_o_ncm_cai_para_anexo_ou_padrao():
+    class CestaSoDeFeijao(CalculadoraFake):
+        ANEXOS = {**CalculadoraFake.ANEXOS, "200003": ("0713",)}
+
+    docs = ler_caminho(FX).documentos
+    a = analisar(Empresa("11222333000181", "LOJA", "real", "SP", 3550308), docs, Premissas(anos=[2033]),
+                 CestaSoDeFeijao())
+    arroz = _item(a, "ARZ-5")                          # o fornecedor informou 200003 para o arroz (NCM 1006...)
+    assert arroz.classificacao.origem == "padrao" and arroz.classificacao.cclasstrib == "000001"
+    assert not any(al.erro for al in arroz.aliquotas.values())
+    assert any("incompatível com o NCM" in t and "NCM 10063021 com 200003" in t for t in a.alertas)
