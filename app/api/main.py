@@ -132,6 +132,15 @@ def _carregar(s, empresa_id: int) -> models.Empresa:
 
 
 def _render(request: Request, nome: str, **ctx):
+    e = ctx.get("e")
+    if isinstance(e, models.Empresa) and "grupo" not in ctx:
+        # Nas telas do estabelecimento o base.html oferece o link da visão consolidada quando a pessoa
+        # jurídica (raiz do CNPJ) tem mais de um estabelecimento cadastrado.
+        raiz = servicos.raiz_cnpj(e.cnpj)
+        with db.sessao() as s:
+            n = len(servicos.estabelecimentos_da_raiz(s, raiz))
+        if n > 1:
+            ctx["grupo_da_empresa"] = {"raiz": raiz, "n": n}
     return templates.TemplateResponse(request, nome, ctx)
 
 
@@ -145,7 +154,13 @@ def inicio(request: Request):
                                   .group_by(models.DocumentoFiscal.empresa_id)).all())
         empresas = list(s.scalars(select(models.Empresa).order_by(models.Empresa.nome)))
         linhas = [{"e": e, "notas": contagem.get(e.id, 0), "cert": e.certificado} for e in empresas]
-    return _render(request, "inicio.html", empresas=linhas, calc=calculadora.identificacao(),
+    por_raiz: dict[str, list[dict]] = {}
+    for linha in linhas:
+        por_raiz.setdefault(servicos.raiz_cnpj(linha["e"].cnpj), []).append(linha)
+    grupos = sorted(({"raiz": raiz, "nome": min(ls, key=lambda x: x["e"].cnpj[8:12])["e"].nome,  # nome da matriz
+                      "linhas": ls, "varios": len(ls) > 1} for raiz, ls in por_raiz.items()),
+                    key=lambda g: g["nome"])
+    return _render(request, "inicio.html", empresas=linhas, grupos=grupos, calc=calculadora.identificacao(),
                    calc_local=settings.calculadora_url.startswith("http://localhost"))
 
 
@@ -465,21 +480,80 @@ def _ano(ano: int | None, a) -> int:
     return ano if ano in a.premissas.anos else a.premissas.anos[0]
 
 
+# --- Visão consolidada da pessoa jurídica (raiz do CNPJ) -----------------------------------------------------------
+
+class _Grupo:
+    """Fachada da pessoa jurídica para os templates: dados da matriz e a lista de estabelecimentos. Sem `id` —
+    as telas analíticas montam os links com `base`, e o que é por estabelecimento (classificação) fica de fora."""
+
+    def __init__(self, empresas: list[models.Empresa]):
+        matriz = empresas[0]
+        self.raiz = servicos.raiz_cnpj(matriz.cnpj)
+        self.nome, self.regime, self.uf = matriz.nome, matriz.regime, matriz.uf
+        self.estabelecimentos = empresas
+        self.cnpj = f"raiz {self.raiz} · {len(empresas)} estabelecimentos"
+
+
+def _analise_grupo(raiz: str, inicio: date | None, fim: date | None):
+    try:
+        return _analise_grupo_sem_tratamento(raiz, inicio, fim)
+    except CalculadoraIndisponivel:
+        _garantir_calculadora_local()          # tenta subir a calculadora local uma vez
+        try:
+            return _analise_grupo_sem_tratamento(raiz, inicio, fim)
+        except CalculadoraIndisponivel as erro:
+            raise HTTPException(503, f"{erro}. A análise não foi feita para não calcular sem a calculadora oficial. "
+                                     f"Inicie-a com: python -m app.cli calculadora executar") from erro
+
+
+def _analise_grupo_sem_tratamento(raiz: str, inicio: date | None, fim: date | None):
+    with db.sessao() as s:
+        empresas = servicos.estabelecimentos_da_raiz(s, raiz)
+        if not empresas:
+            raise HTTPException(404, "Nenhuma empresa com essa raiz de CNPJ")
+        chave = ("grupo", raiz, inicio, fim)
+        assinatura = tuple(_assinatura_dos_dados(s, e) for e in empresas)
+        guardado = _CACHE_ANALISES.get(chave)
+        if guardado and guardado[0] == assinatura:
+            return _Grupo(empresas), guardado[1]
+        a = servicos.montar_analise_grupo(s, empresas, calculadora, inicio, fim)
+        _CACHE_ANALISES[chave] = (assinatura, a)
+        return _Grupo(empresas), a
+
+
 # --- Fornecedores e produtos (negociação) --------------------------------------------------------------------------
+
+def _pagina_fornecedores(request: Request, e, a, base: str, ano: int | None, inicio: str | None, fim: str | None,
+                         regime: str, **extra):
+    """Corpo comum da tela de fornecedores: `e` é a empresa ou a fachada do grupo e `base` o prefixo dos links."""
+    ano = _ano(ano, a)
+    lista = negociacao.fornecedores(negociacao.compras(a, ano))
+    if regime:
+        lista = [f for f in lista if f.regime == regime]
+    return _render(request, "fornecedores.html", e=e, base=base, a=a, aba="fornecedores", ano=ano, fornecedores=lista,
+                   inicio=inicio or "", fim=fim or "", regime=regime,
+                   total_atual=sum((f.custo_atual for f in lista), negociacao.ZERO),
+                   total_ano=sum((f.custo_precos_hoje for f in lista), negociacao.ZERO), **extra)
+
 
 @app.get("/empresas/{empresa_id}/fornecedores", response_class=HTMLResponse)
 async def tela_fornecedores(request: Request, empresa_id: int, ano: int | None = None, inicio: str | None = None,
                             fim: str | None = None, regime: str = ""):
     di, df = _periodo(inicio, fim)
     e, a = await run_in_threadpool(_analise, empresa_id, di, df)
+    return _pagina_fornecedores(request, e, a, f"/empresas/{empresa_id}", ano, inicio, fim, regime)
+
+
+def _pagina_fornecedor(request: Request, e, a, base: str, cnpj: str, ano: int | None, inicio: str | None,
+                       fim: str | None, **extra):
     ano = _ano(ano, a)
-    lista = negociacao.fornecedores(negociacao.compras(a, ano))
-    if regime:
-        lista = [f for f in lista if f.regime == regime]
-    return _render(request, "fornecedores.html", e=e, a=a, aba="fornecedores", ano=ano, fornecedores=lista,
-                   inicio=inicio or "", fim=fim or "", regime=regime,
-                   total_atual=sum((f.custo_atual for f in lista), negociacao.ZERO),
-                   total_ano=sum((f.custo_precos_hoje for f in lista), negociacao.ZERO))
+    todas = negociacao.compras(a, ano)
+    do_fornecedor = sorted((c for c in todas if c.fornecedor == cnpj), key=lambda c: -c.variacao_custo)
+    if not do_fornecedor:
+        raise HTTPException(404, "Fornecedor sem compras no período")
+    resumo = negociacao.fornecedores(do_fornecedor)[0]
+    return _render(request, "fornecedor.html", e=e, base=base, a=a, aba="fornecedores", ano=ano, f=resumo,
+                   compras=do_fornecedor, inicio=inicio or "", fim=fim or "", **extra)
 
 
 @app.get("/empresas/{empresa_id}/fornecedores/{cnpj}", response_class=HTMLResponse)
@@ -487,14 +561,15 @@ async def tela_fornecedor(request: Request, empresa_id: int, cnpj: str, ano: int
                           inicio: str | None = None, fim: str | None = None):
     di, df = _periodo(inicio, fim)
     e, a = await run_in_threadpool(_analise, empresa_id, di, df)
+    return _pagina_fornecedor(request, e, a, f"/empresas/{empresa_id}", cnpj, ano, inicio, fim)
+
+
+def _pagina_produtos(request: Request, e, a, base: str, ano: int | None, inicio: str | None, fim: str | None,
+                     **extra):
     ano = _ano(ano, a)
-    todas = negociacao.compras(a, ano)
-    do_fornecedor = sorted((c for c in todas if c.fornecedor == cnpj), key=lambda c: -c.variacao_custo)
-    if not do_fornecedor:
-        raise HTTPException(404, "Fornecedor sem compras no período")
-    resumo = negociacao.fornecedores(do_fornecedor)[0]
-    return _render(request, "fornecedor.html", e=e, a=a, aba="fornecedores", ano=ano, f=resumo,
-                   compras=do_fornecedor, inicio=inicio or "", fim=fim or "")
+    lista = negociacao.produtos(a, negociacao.compras(a, ano), ano)
+    return _render(request, "produtos.html", e=e, base=base, a=a, aba="produtos", ano=ano, produtos=lista,
+                   inicio=inicio or "", fim=fim or "", **extra)
 
 
 @app.get("/empresas/{empresa_id}/produtos", response_class=HTMLResponse)
@@ -502,10 +577,19 @@ async def tela_produtos(request: Request, empresa_id: int, ano: int | None = Non
                         fim: str | None = None):
     di, df = _periodo(inicio, fim)
     e, a = await run_in_threadpool(_analise, empresa_id, di, df)
+    return _pagina_produtos(request, e, a, f"/empresas/{empresa_id}", ano, inicio, fim)
+
+
+def _pagina_produto(request: Request, e, a, base: str, chave: str, ano: int | None, inicio: str | None,
+                    fim: str | None, **extra):
     ano = _ano(ano, a)
-    lista = negociacao.produtos(a, negociacao.compras(a, ano), ano)
-    return _render(request, "produtos.html", e=e, a=a, aba="produtos", ano=ano, produtos=lista,
-                   inicio=inicio or "", fim=fim or "")
+    produto = next((p for p in negociacao.produtos(a, negociacao.compras(a, ano), ano) if p.chave == chave), None)
+    if not produto:
+        raise HTTPException(404, "Produto sem movimento no período")
+    compras = sorted(produto.compras, key=lambda c: (c.unidade, c.custo_unit_precos_hoje or 0))
+    maior = max((max(c.custo_unit_atual or 0, c.custo_unit_precos_hoje or 0) for c in compras), default=0) or 1
+    return _render(request, "produto.html", e=e, base=base, a=a, aba="produtos", ano=ano, p=produto, compras=compras,
+                   maior=maior, inicio=inicio or "", fim=fim or "", **extra)
 
 
 @app.get("/empresas/{empresa_id}/produtos/{chave}", response_class=HTMLResponse)
@@ -513,14 +597,15 @@ async def tela_produto(request: Request, empresa_id: int, chave: str, ano: int |
                        inicio: str | None = None, fim: str | None = None):
     di, df = _periodo(inicio, fim)
     e, a = await run_in_threadpool(_analise, empresa_id, di, df)
-    ano = _ano(ano, a)
-    produto = next((p for p in negociacao.produtos(a, negociacao.compras(a, ano), ano) if p.chave == chave), None)
-    if not produto:
-        raise HTTPException(404, "Produto sem movimento no período")
-    compras = sorted(produto.compras, key=lambda c: (c.unidade, c.custo_unit_precos_hoje or 0))
-    maior = max((max(c.custo_unit_atual or 0, c.custo_unit_precos_hoje or 0) for c in compras), default=0) or 1
-    return _render(request, "produto.html", e=e, a=a, aba="produtos", ano=ano, p=produto, compras=compras,
-                   maior=maior, inicio=inicio or "", fim=fim or "")
+    return _pagina_produto(request, e, a, f"/empresas/{empresa_id}", chave, ano, inicio, fim)
+
+
+def _excel_negociacao(a, ano: int, nome_arquivo: str) -> Response:
+    buffer = io.BytesIO()
+    exportar_negociacao(negociacao.compras(a, ano), ano, buffer)
+    return Response(buffer.getvalue(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'})
 
 
 @app.get("/empresas/{empresa_id}/negociacao.xlsx")
@@ -529,11 +614,17 @@ async def excel_negociacao(empresa_id: int, ano: int | None = None, inicio: str 
     di, df = _periodo(inicio, fim)
     e, a = await run_in_threadpool(_analise, empresa_id, di, df)
     ano = _ano(ano, a)
-    buffer = io.BytesIO()
-    exportar_negociacao(negociacao.compras(a, ano), ano, buffer)
-    return Response(buffer.getvalue(),
-                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    headers={"Content-Disposition": f'attachment; filename="negociacao_{e.cnpj}_{ano}.xlsx"'})
+    return _excel_negociacao(a, ano, f"negociacao_{e.cnpj}_{ano}.xlsx")
+
+
+def _pagina_painel(request: Request, e, a, base: str, anos: str, inicio: str | None, fim: str | None, simples,
+                   **extra):
+    destaque = [int(x) for x in anos.split(",") if x.strip().isdigit() and int(x) in a.premissas.anos] or a.premissas.anos[-1:]
+    resumo = agregacao.resumo(a)
+    return _render(request, "painel.html", e=e, base=base, a=a, aba="analise", resumo=resumo, simples=simples,
+                   grafico=linha_do_tempo(resumo) if a.itens else None, anos=destaque,
+                   produtos=agregacao.por_produto(a)[:100], fornecedores=agregacao.por_fornecedor(a)[:100],
+                   inicio=inicio or "", fim=fim or "", anos_texto=",".join(map(str, destaque)), **extra)
 
 
 @app.get("/empresas/{empresa_id}/analise", response_class=HTMLResponse)
@@ -541,13 +632,16 @@ async def painel(request: Request, empresa_id: int, inicio: str | None = None, f
                  anos: str = "2027,2029,2033"):
     di, df = _periodo(inicio, fim)
     e, a = await run_in_threadpool(_analise, empresa_id, di, df)
-    destaque = [int(x) for x in anos.split(",") if x.strip().isdigit() and int(x) in a.premissas.anos] or a.premissas.anos[-1:]
-    resumo = agregacao.resumo(a)
     simples = await run_in_threadpool(_comparar_simples, empresa_id, e, a, di, df)
-    return _render(request, "painel.html", e=e, a=a, aba="analise", resumo=resumo, simples=simples,
-                   grafico=linha_do_tempo(resumo) if a.itens else None, anos=destaque,
-                   produtos=agregacao.por_produto(a)[:100], fornecedores=agregacao.por_fornecedor(a)[:100],
-                   inicio=inicio or "", fim=fim or "", anos_texto=",".join(map(str, destaque)))
+    return _pagina_painel(request, e, a, f"/empresas/{empresa_id}", anos, inicio, fim, simples)
+
+
+def _excel_analise(a, simples, nome_arquivo: str) -> Response:
+    buffer = io.BytesIO()
+    exportar(a, buffer, {"Simples x regular": simples} if simples else None)
+    return Response(buffer.getvalue(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'})
 
 
 @app.get("/empresas/{empresa_id}/analise/excel")
@@ -555,11 +649,66 @@ async def baixar_excel(empresa_id: int, inicio: str | None = None, fim: str | No
     di, df = _periodo(inicio, fim)
     e, a = await run_in_threadpool(_analise, empresa_id, di, df)
     simples = await run_in_threadpool(_comparar_simples, empresa_id, e, a, di, df)
-    buffer = io.BytesIO()
-    exportar(a, buffer, {"Simples x regular": simples} if simples else None)
-    return Response(buffer.getvalue(),
-                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    headers={"Content-Disposition": f'attachment; filename="reforma_{e.cnpj}.xlsx"'})
+    return _excel_analise(a, simples, f"reforma_{e.cnpj}.xlsx")
+
+
+# --- Grupo: as mesmas telas analíticas sobre a análise consolidada da pessoa jurídica ------------------------------
+
+@app.get("/grupos/{raiz}/analise", response_class=HTMLResponse)
+async def painel_grupo(request: Request, raiz: str, inicio: str | None = None, fim: str | None = None,
+                       anos: str = "2027,2029,2033"):
+    di, df = _periodo(inicio, fim)
+    g, a = await run_in_threadpool(_analise_grupo, raiz, di, df)
+    # Sem comparação com o Simples: o regime é uma condição de cada estabelecimento, não do grupo.
+    return _pagina_painel(request, g, a, f"/grupos/{raiz}", anos, inicio, fim, simples=None, grupo=g)
+
+
+@app.get("/grupos/{raiz}/analise/excel")
+async def baixar_excel_grupo(raiz: str, inicio: str | None = None, fim: str | None = None):
+    di, df = _periodo(inicio, fim)
+    _, a = await run_in_threadpool(_analise_grupo, raiz, di, df)
+    return _excel_analise(a, None, f"reforma_grupo_{raiz}.xlsx")
+
+
+@app.get("/grupos/{raiz}/fornecedores", response_class=HTMLResponse)
+async def tela_fornecedores_grupo(request: Request, raiz: str, ano: int | None = None, inicio: str | None = None,
+                                  fim: str | None = None, regime: str = ""):
+    di, df = _periodo(inicio, fim)
+    g, a = await run_in_threadpool(_analise_grupo, raiz, di, df)
+    return _pagina_fornecedores(request, g, a, f"/grupos/{raiz}", ano, inicio, fim, regime, grupo=g)
+
+
+@app.get("/grupos/{raiz}/fornecedores/{cnpj}", response_class=HTMLResponse)
+async def tela_fornecedor_grupo(request: Request, raiz: str, cnpj: str, ano: int | None = None,
+                                inicio: str | None = None, fim: str | None = None):
+    di, df = _periodo(inicio, fim)
+    g, a = await run_in_threadpool(_analise_grupo, raiz, di, df)
+    return _pagina_fornecedor(request, g, a, f"/grupos/{raiz}", cnpj, ano, inicio, fim, grupo=g)
+
+
+@app.get("/grupos/{raiz}/produtos", response_class=HTMLResponse)
+async def tela_produtos_grupo(request: Request, raiz: str, ano: int | None = None, inicio: str | None = None,
+                              fim: str | None = None):
+    di, df = _periodo(inicio, fim)
+    g, a = await run_in_threadpool(_analise_grupo, raiz, di, df)
+    return _pagina_produtos(request, g, a, f"/grupos/{raiz}", ano, inicio, fim, grupo=g)
+
+
+@app.get("/grupos/{raiz}/produtos/{chave}", response_class=HTMLResponse)
+async def tela_produto_grupo(request: Request, raiz: str, chave: str, ano: int | None = None,
+                             inicio: str | None = None, fim: str | None = None):
+    di, df = _periodo(inicio, fim)
+    g, a = await run_in_threadpool(_analise_grupo, raiz, di, df)
+    return _pagina_produto(request, g, a, f"/grupos/{raiz}", chave, ano, inicio, fim, grupo=g)
+
+
+@app.get("/grupos/{raiz}/negociacao.xlsx")
+async def excel_negociacao_grupo(raiz: str, ano: int | None = None, inicio: str | None = None,
+                                 fim: str | None = None):
+    di, df = _periodo(inicio, fim)
+    _, a = await run_in_threadpool(_analise_grupo, raiz, di, df)
+    ano = _ano(ano, a)
+    return _excel_negociacao(a, ano, f"negociacao_grupo_{raiz}_{ano}.xlsx")
 
 
 # --- Apuração assistida (API da Receita) -------------------------------------------------------------------------

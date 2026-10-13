@@ -35,7 +35,7 @@
         <th title="Variação do preço de nota que mantém o seu custo de hoje">Preço de nota de equilíbrio</th>
         <th title="A preços de hoje, se os produtos com alternativa fossem comprados do melhor fornecedor do mesmo EAN">Economia trocando</th></tr>
     {% for f in fornecedores %}
-    <tr><td class="txt"><a href="/empresas/{{ e.id }}/fornecedores/{{ f.cnpj }}?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">{{ f.nome }}</a>
+    <tr><td class="txt"><a href="{{ base }}/fornecedores/{{ f.cnpj }}?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">{{ f.nome }}</a>
           <br><span class="suave">{{ f.cnpj }} · {{ f.uf }}</span></td>
         <td class="txt">{{ nomes_regime.get(f.regime, f.regime) }}</td><td>{{ f.produtos }}</td><td>{{ f.notas }}</td>
         <td>{{ f.preco_nota_atual|brl }}</td><td>{{ f.custo_atual|brl }}</td><td>{{ f.custo_precos_hoje|brl }}</td>

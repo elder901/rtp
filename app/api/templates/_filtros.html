@@ -9,5 +9,5 @@
     <option value="{{ v }}" {{ 'selected' if regime == v }}>{{ t }}</option>{% endfor %}</select></div>
   {% endif %}
   <div class="acoes" style="margin:0"><button type="submit">Atualizar</button>
-    <a class="botao secundario" href="/empresas/{{ e.id }}/negociacao.xlsx?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">Excel para negociação</a></div>
+    <a class="botao secundario" href="{{ base }}/negociacao.xlsx?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">Excel para negociação</a></div>
 </form>

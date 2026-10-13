@@ -29,6 +29,17 @@ def so_digitos(s: str) -> str:
 
 # --- Empresas ----------------------------------------------------------------------------------------------------
 
+def raiz_cnpj(cnpj: str) -> str:
+    """Raiz do CNPJ (8 primeiros dígitos): identifica a pessoa jurídica; o resto é o estabelecimento (filial)."""
+    return so_digitos(cnpj)[:8]
+
+
+def estabelecimentos_da_raiz(s: Session, raiz: str) -> list[models.Empresa]:
+    """Estabelecimentos (CNPJs) da mesma pessoa jurídica, matriz primeiro (ordem do número da filial)."""
+    todas = s.scalars(select(models.Empresa)).all()
+    return sorted((e for e in todas if e.cnpj[:8] == raiz), key=lambda e: e.cnpj[8:12])
+
+
 def criar_empresa(s: Session, cnpj: str, nome: str, regime: str, uf: str, cod_municipio: int,
                   industria: bool = False) -> models.Empresa:
     cnpj = so_digitos(cnpj)
@@ -268,6 +279,37 @@ def montar_analise(s: Session, e: models.Empresa, calculadora: CalculadoraRTC, i
         empresa.regime = regime
     return analisar(empresa, docs if docs is not None else documentos(s, e, inicio, fim),
                     premissas_da_empresa(e, anos), calculadora, classificacoes(s, e))
+
+
+def montar_analise_grupo(s: Session, empresas: list[models.Empresa], calculadora: CalculadoraRTC,
+                         inicio: date | None = None, fim: date | None = None) -> Analise:
+    """Análise consolidada da pessoa jurídica: notas de todos os estabelecimentos, sem as operações internas
+    (notas cuja contraparte tem a mesma raiz de CNPJ — transferências entre filiais), que na visão da empresa
+    inteira não são compra nem venda e contariam duas vezes. Usa as premissas e o regime da matriz; as
+    classificações dos estabelecimentos são mescladas e, em conflito, vale a da matriz."""
+    matriz = empresas[0]
+    raiz = raiz_cnpj(matriz.cnpj)
+    docs: list[Documento] = []
+    vistas: set[str] = set()
+    internas = 0
+    for e in empresas:
+        for d in documentos(s, e, inicio, fim):
+            if d.chave in vistas:          # transferência já vista pelo outro estabelecimento
+                continue
+            vistas.add(d.chave)
+            if so_digitos(d.contraparte_para(e.cnpj).cnpj)[:8] == raiz:
+                internas += 1
+                continue
+            docs.append(d)
+    docs.sort(key=lambda d: (d.emissao.replace(tzinfo=None), d.chave))   # NF-e têm fuso; consolidados não
+    ajustes: dict[str, tuple[str, str]] = {}
+    for e in reversed(empresas):           # matriz (primeira da lista) prevalece
+        ajustes.update(classificacoes(s, e))
+    a = analisar(empresa_do_motor(matriz), docs, premissas_da_empresa(matriz), calculadora, ajustes)
+    if internas:
+        a.alertas.insert(0, f"{internas} nota(s) entre estabelecimentos do próprio grupo ficaram fora da visão "
+                            f"consolidada: transferência interna não é compra nem venda da empresa como um todo.")
+    return a
 
 
 def comparar_simples(s: Session, e: models.Empresa, calculadora: CalculadoraRTC, a_simples: Analise,

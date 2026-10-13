@@ -170,6 +170,8 @@
 {% set secoes = [('geral', '', 'Dados e notas'), ('classificacao', '/classificacao', 'Classificação'),
                  ('analise', '/analise', 'Análise'), ('fornecedores', '/fornecedores', 'Fornecedores'),
                  ('produtos', '/produtos', 'Produtos'), ('apuracao', '/apuracao', 'Apuração Receita')] %}
+{# prefixo dos links analíticos: /empresas/{id} ou /grupos/{raiz} (a fachada do grupo não tem id) #}
+{% set base = base if base is defined else ('/empresas/' ~ e.id if e is defined and e.id is defined else '') %}
 {% set aba_atual = aba if aba is defined else '' %}
 {% set titulo_secao = (secoes|selectattr(0, 'equalto', aba_atual)|map(attribute=2)|first) if aba_atual else 'Empresas' %}
 
@@ -190,10 +192,28 @@
     <nav aria-label="Navegação principal">
       <a href="/" class="{{ 'ativa' if not aba_atual }}" {{ 'aria-current=page' if not aba_atual }}>{{ icone('empresas') }}Empresas</a>
     </nav>
-    {% if e is defined %}
+    {% if grupo is defined %}
+    <div class="grupo">Empresa (consolidado)<strong title="{{ grupo.nome }}">{{ grupo.nome }}</strong>
+      <span>raiz {{ grupo.raiz }} · {{ grupo.estabelecimentos|length }} estabelecimentos</span></div>
+    <nav aria-label="Seções do consolidado">
+      {% for chave, caminho, rotulo in [('analise', '/analise', 'Análise'), ('fornecedores', '/fornecedores', 'Fornecedores'),
+                                        ('produtos', '/produtos', 'Produtos')] %}
+      <a href="{{ base }}{{ caminho }}" class="{{ 'ativa' if aba_atual == chave }}" {{ 'aria-current=page' if aba_atual == chave }}>{{ icone(chave) }}{{ rotulo }}</a>
+      {% endfor %}
+    </nav>
+    <div class="grupo">Estabelecimentos</div>
+    <nav aria-label="Estabelecimentos">
+      {% for est in grupo.estabelecimentos %}
+      <a href="/empresas/{{ est.id }}" title="{{ est.nome }}">{{ icone('empresas') }}<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ est.nome }}</span></a>
+      {% endfor %}
+    </nav>
+    {% elif e is defined %}
     <div class="grupo">Empresa<strong title="{{ e.nome }}">{{ e.nome }}</strong>
       <span>{{ e.cnpj }} · {{ {'real':'Lucro Real','presumido':'Lucro Presumido','simples':'Simples'}[e.regime] }} · {{ e.uf }}</span></div>
     <nav aria-label="Seções da empresa">
+      {% if grupo_da_empresa is defined %}
+      <a href="/grupos/{{ grupo_da_empresa.raiz }}/analise">{{ icone('empresas') }}Empresa inteira (consolidado)</a>
+      {% endif %}
       {% for chave, caminho, rotulo in secoes %}
       <a href="/empresas/{{ e.id }}{{ caminho }}" class="{{ 'ativa' if aba_atual == chave }}" {{ 'aria-current=page' if aba_atual == chave }}>{{ icone(chave) }}{{ rotulo }}</a>
       {% endfor %}

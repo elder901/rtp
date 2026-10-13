@@ -12,7 +12,7 @@
     <div><label>até</label><input type="date" name="fim" value="{{ fim }}"></div>
     <div><label>Anos nas tabelas</label><input name="anos" value="{{ anos_texto }}" placeholder="2027,2029,2033"></div>
     <div class="acoes" style="margin:0"><button type="submit">Atualizar</button>
-      <a class="botao secundario" href="/empresas/{{ e.id }}/analise/excel?inicio={{ inicio }}&fim={{ fim }}">Excel completo</a></div>
+      <a class="botao secundario" href="{{ base }}/analise/excel?inicio={{ inicio }}&fim={{ fim }}">Excel completo</a></div>
   </form>
   <p class="suave" style="margin-bottom:0">{{ a.itens|length }} itens analisados ·
     CBS {{ a.premissas.cbs_referencia }}% · IBS {{ a.premissas.ibs_uf_referencia + a.premissas.ibs_mun_referencia }}% (premissas)<br>

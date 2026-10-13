@@ -24,7 +24,7 @@
     {% for p in produtos %}
     {% set m = p.margem_ano_precos_hoje(ano) %}{% set cen = p.cenarios_preco(ano) %}
     <tr data-busca="{{ (p.gtin ~ ' ' ~ p.codigos|join(' ') ~ ' ' ~ p.descricao ~ ' ' ~ p.ncm)|lower }}" data-forn="{{ p.fornecedores }}">
-      <td class="txt quebra"><a href="/empresas/{{ e.id }}/produtos/{{ p.chave }}?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">{{ p.descricao }}</a>
+      <td class="txt quebra"><a href="{{ base }}/produtos/{{ p.chave }}?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">{{ p.descricao }}</a>
         <br><span class="suave">{{ p.codigos|join(', ') }} · NCM {{ p.ncm }}</span></td>
       <td class="txt" style="font-family:monospace">{{ p.gtin or '—' }}</td>
       <td class="txt">{{ p.cclasstrib }} <span class="tag {{ p.origem_classificacao }}">{{ p.origem_classificacao }}</span></td>

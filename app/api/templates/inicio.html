@@ -18,10 +18,16 @@
   <div class="tabela"><table>
     <tr><th class="txt">Empresa</th><th class="txt">CNPJ</th><th class="txt">Regime</th><th class="txt">UF</th>
         <th>NF-e completas</th><th class="txt">Certificado A1</th></tr>
-    {% for l in empresas %}
+    {% for g in grupos %}
+    {% if g.varios %}{# pessoa jurídica com mais de um estabelecimento: cabeçalho com a visão consolidada #}
+    <tr><td colspan="6" class="txt"><b>{{ g.nome }}</b> <span class="tag">{{ g.linhas|length }} estabelecimentos</span>
+        · <a href="/grupos/{{ g.raiz }}/analise">Análise consolidada</a></td></tr>
+    {% endif %}
+    {% for l in g.linhas %}
     <tr><td><a href="/empresas/{{ l.e.id }}">{{ l.e.nome }}</a></td><td class="txt">{{ l.e.cnpj }}</td>
         <td class="txt">{{ l.e.regime }}</td><td class="txt">{{ l.e.uf }}</td><td>{{ l.notas }}</td>
         <td class="txt">{{ ('até ' ~ l.cert.validade.strftime('%d/%m/%Y')) if l.cert else '—' }}</td></tr>
+    {% endfor %}
     {% endfor %}
   </table></div>
   {% else %}<p class="suave">Nenhuma empresa cadastrada.</p>{% endif %}

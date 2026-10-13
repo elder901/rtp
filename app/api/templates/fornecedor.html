@@ -8,7 +8,7 @@
 {% set nomes_regime = {'normal': 'Regime normal', 'simples': 'Simples Nacional', 'mei': 'MEI', 'nao_contribuinte': 'Não contribuinte'} %}
 {% block conteudo %}
 <div class="card">
-  <p style="margin-top:0"><a href="/empresas/{{ e.id }}/fornecedores?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">← Fornecedores</a></p>
+  <p style="margin-top:0"><a href="{{ base }}/fornecedores?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">← Fornecedores</a></p>
   <h2 style="margin-bottom:2px">{{ f.nome }}</h2>
   <p class="suave" style="margin-top:0">{{ f.cnpj }} · {{ nomes_regime.get(f.regime, f.regime) }} · {{ f.uf }} · {{ f.notas }} nota(s) · {{ f.produtos }} produto(s)</p>
   {% include "_filtros.html" %}
@@ -45,7 +45,7 @@
         <th>Preço de nota de equilíbrio</th><th>Δ preço de nota</th><th>IS no custo {{ ano }}</th>
         <th class="txt">Melhor fornecedor em {{ ano }} (preços de hoje)</th><th>Custo unit. dele</th><th>Economia trocando</th></tr>
     {% for c in compras %}
-    <tr><td class="txt quebra"><a href="/empresas/{{ e.id }}/produtos/{{ c.chave }}?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">{{ c.descricao }}</a>
+    <tr><td class="txt quebra"><a href="{{ base }}/produtos/{{ c.chave }}?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">{{ c.descricao }}</a>
           <br><span class="suave">{{ c.codigos|join(', ') }} · NCM {{ c.ncm }}</span></td>
         <td class="txt" style="font-family:monospace">{{ c.gtin or '—' }}</td><td class="txt">{{ c.cclasstrib }}</td>
         <td class="txt">{{ c.unidade }}</td><td>{{ c.quantidade|brl }}</td>
@@ -54,7 +54,7 @@
         <td><b>{{ c.preco_nota_equilibrio_unit|brl }}</b></td><td>{{ var(c.variacao_preco_nota_equilibrio_pct, inverso=true) }}</td>
         <td title="{{ c.tratamento_is }}">{{ c.imposto_seletivo_ano|brl if c.imposto_seletivo_ano else '—' }}</td>
         {% if c.melhor and c.melhor is not sameas c %}
-        <td class="txt"><a href="/empresas/{{ e.id }}/fornecedores/{{ c.melhor.fornecedor }}?ano={{ ano }}">{{ c.melhor.fornecedor_nome }}</a></td>
+        <td class="txt"><a href="{{ base }}/fornecedores/{{ c.melhor.fornecedor }}?ano={{ ano }}">{{ c.melhor.fornecedor_nome }}</a></td>
         <td>{{ c.melhor.custo_unit_precos_hoje|brl }}</td><td><span class="desce">{{ c.economia_trocando|brl }}</span></td>
         {% elif c.melhor %}<td class="txt"><span class="desce">este é o melhor</span></td><td>—</td><td>—</td>
         {% else %}<td class="txt suave">sem outro fornecedor</td><td>—</td><td>—</td>{% endif %}</tr>
