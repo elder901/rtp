@@ -10,9 +10,13 @@
     (tributação integral). Alguns itens dos anexos exigem também a descrição: confira os marcados como anexo.
     Preencha CST e cClassTrib só onde quiser ajustar; em branco remove o ajuste. Cada ajuste é conferido na
     Calculadora RTC ao salvar.</p>
+  <form method="get" class="acoes">
+    <input name="q" value="{{ q }}" placeholder="Buscar por EAN, código, descrição ou NCM" style="max-width:320px">
+    <label class="check"><input type="checkbox" name="padrao" value="1" {{ 'checked' if padrao }}> Só os que estão no padrão</label>
+    <button type="submit" class="secundario">Filtrar</button>
+    {% if q or padrao %}<a href="/empresas/{{ e.id }}/classificacao">Limpar filtro</a>{% endif %}
+  </form>
   <div class="acoes">
-    <input id="filtro" placeholder="Filtrar por EAN, código, descrição ou NCM" style="max-width:320px">
-    <label class="check"><input type="checkbox" id="so-padrao"> Só os que estão no padrão</label>
     <a class="botao secundario" href="/empresas/{{ e.id }}/classificacao.csv">Exportar CSV</a>
     <form method="post" action="/empresas/{{ e.id }}/classificacao/csv" enctype="multipart/form-data" class="acoes" style="margin:0">
       <input type="file" name="arquivo" accept=".csv" required style="max-width:220px">
@@ -52,7 +56,8 @@
 
 {% if not situacoes %}<div class="alerta">Calculadora indisponível: a lista de códigos e a validação não puderam ser carregadas.</div>{% endif %}
 
-<form method="post" action="/empresas/{{ e.id }}/classificacao" class="card">
+<form method="post" action="/empresas/{{ e.id }}/classificacao?{{ consulta }}&pagina={{ pag.pagina }}" class="card">
+  {% include "_paginacao.html" %}
   <div class="tabela"><table id="tabela">
     <tr><th class="txt">Produto</th><th class="txt">EAN</th><th class="txt">NCM</th><th class="txt">Operações</th>
         <th>Vendas</th><th>Compras</th><th class="txt">Em uso</th><th class="txt">Sugestão</th>
@@ -60,7 +65,7 @@
     {% for p in produtos %}
     {% set validacao = validacoes.get(p.chave) %}
     {% set escopo = p.escopo_ajuste %}
-    <tr data-origem="{{ p.origem }}" data-busca="{{ (p.gtin ~ ' ' ~ p.codigos|join(' ') ~ ' ' ~ p.descricao ~ ' ' ~ p.ncms|join(' '))|lower }}">
+    <tr>
       <td class="txt quebra">{{ p.descricao }}<br><span class="suave">{{ p.codigos|join(', ') }}</span>
         <input type="hidden" name="gtin" value="{{ p.gtin }}"><input type="hidden" name="codigo" value="{{ p.codigo_escopado }}">
         <input type="hidden" name="ncm" value="{{ p.ncm }}"><input type="hidden" name="chave_atual" value="{{ p.chave_manual }}"></td>
@@ -80,9 +85,10 @@
       <td><input name="cclasstrib" value="{{ p.cclasstrib if p.origem == 'manual' }}" list="lista-cct" maxlength="6"></td>
       <td class="txt quebra">{% if p.origem == 'manual' and validacao is not none %}{% if validacao %}<span class="sobe">{{ validacao }}</span>{% else %}<span class="desce">ok</span>{% endif %}{% endif %}</td>
     </tr>
-    {% else %}<tr><td colspan="12" class="txt suave">Nenhum produto: importe notas primeiro.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="12" class="txt suave">{{ 'Nenhum produto com esse filtro.' if total_produtos else 'Nenhum produto: importe notas primeiro.' }}</td></tr>{% endfor %}
   </table></div>
-  {% if produtos %}<div class="acoes"><button type="submit">Salvar e validar</button></div>{% endif %}
+  {% if produtos %}<div class="acoes"><button type="submit">Salvar e validar esta página</button></div>{% endif %}
+  {% include "_paginacao.html" %}
 </form>
 
 <datalist id="lista-cst">{% for cst, s in situacoes.items() %}<option value="{{ cst }}">{{ s.descricao }}</option>{% endfor %}</datalist>
@@ -90,14 +96,6 @@
   <option value="{{ cod }}">{{ cst }} · {{ desc[:90] }}</option>{% endfor %}{% endfor %}</datalist>
 
 <script>
-  const filtro = document.getElementById('filtro'), soPadrao = document.getElementById('so-padrao');
-  function filtrar() {
-    const q = filtro.value.trim().toLowerCase();
-    document.querySelectorAll('#tabela tr[data-busca]').forEach(tr => {
-      tr.hidden = (q && !tr.dataset.busca.includes(q)) || (soPadrao.checked && tr.dataset.origem !== 'padrao');
-    });
-  }
-  filtro.addEventListener('input', filtrar); soPadrao.addEventListener('change', filtrar);
   document.querySelectorAll('button.usar').forEach(b => b.addEventListener('click', () => {
     const tr = b.closest('tr');
     tr.querySelector('input[name=cst]').value = b.dataset.cst;

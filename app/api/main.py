@@ -12,10 +12,13 @@ import io
 import json
 import logging
 import secrets
+import threading
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -25,6 +28,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import case, func, select
 
 from app import classificacao as classif
+from app import cobertura
 from app import db, models, servicos
 from app.engine.cenarios import anexos_por_ncm, consenso_fornecedores, declaracoes_fornecedores, xml_incompativeis
 from app.api.grafico import linha_do_tempo
@@ -187,8 +191,10 @@ def empresa(request: Request, empresa_id: int):
                                .where(models.DocumentoFiscal.empresa_id == e.id,
                                       models.DocumentoFiscal.situacao == "completo")
                                .group_by(models.DocumentoFiscal.direcao, models.DocumentoFiscal.origem)).all()
+        cob = cobertura.levantar(s, [e])[0]
         return _render(request, "empresa.html", e=e, premissas=servicos.premissas_da_empresa(e),
-                       situacoes=situacoes, por_origem=por_origem, avisos=AVISOS.pop(e.id, []), aba="geral")
+                       situacoes=situacoes, por_origem=por_origem, cobertura=cob,
+                       alertas_cobertura=cobertura.alertas([cob]), avisos=AVISOS.pop(e.id, []), aba="geral")
 
 
 @app.post("/empresas/{empresa_id}/dados")
@@ -267,18 +273,34 @@ def _chave_do_ajuste(escopo: str, gtin: str, codigo: str, ncm: str) -> str:
     return f"cod:{codigo}"
 
 
+# Base da tela de classificação só da última empresa aberta: os documentos ocupam muita memória.
+_BASE_CLASSIFICACAO: dict[int, tuple] = {}
+
+
 def _base_classificacao(s, e: models.Empresa):
     """Documentos e as peças da classificação do motor: anexos por NCM, pares do XML recusados e o que os
-    fornecedores declaram por produto. Sem a calculadora a tela abre sem anexo e sem a checagem dos pares."""
-    docs = servicos.documentos(s, e)
-    try:
-        anexos = anexos_por_ncm(calculadora, {it.ncm for d in docs for it in d.itens})
-        incompativeis = xml_incompativeis(calculadora, {(it.ibscbs.cclasstrib, it.ncm) for d in docs for it in d.itens
-                                                         if it.ibscbs and it.ibscbs.cclasstrib})
-    except ErroCalculadora:
-        anexos, incompativeis = {}, set()
-    entradas = (it for d in docs if d.direcao_para(e.cnpj) == "entrada" for it in d.itens)
-    return docs, anexos, incompativeis, declaracoes_fornecedores(entradas, incompativeis)
+    fornecedores declaram por produto. Sem a calculadora a tela abre sem anexo e sem a checagem dos pares.
+    Fica guardada enquanto as notas não mudam (ler os XMLs e consultar os anexos leva quase todo o tempo da tela):
+    paginar, filtrar e salvar ajustes não relê as notas."""
+    with _trava(("classificacao", e.id)):
+        assinatura = _assinatura_das_notas(s, e)
+        guardado = _BASE_CLASSIFICACAO.get(e.id)
+        if guardado and guardado[0] == assinatura:
+            return guardado[1]
+        docs = servicos.documentos(s, e)
+        try:
+            anexos = anexos_por_ncm(calculadora, {it.ncm for d in docs for it in d.itens})
+            incompativeis = xml_incompativeis(calculadora, {(it.ibscbs.cclasstrib, it.ncm) for d in docs
+                                                             for it in d.itens if it.ibscbs and it.ibscbs.cclasstrib})
+            completa = True
+        except ErroCalculadora:
+            anexos, incompativeis, completa = {}, set(), False
+        entradas = (it for d in docs if d.direcao_para(e.cnpj) == "entrada" for it in d.itens)
+        base = docs, anexos, incompativeis, declaracoes_fornecedores(entradas, incompativeis)
+        _BASE_CLASSIFICACAO.clear()
+        if completa:          # sem a calculadora não guarda: a próxima abertura tenta de novo
+            _BASE_CLASSIFICACAO[e.id] = (assinatura, base)
+        return base
 
 
 def _produtos_classificacao(s, e: models.Empresa, ajustes: dict):
@@ -290,13 +312,33 @@ def _produtos_classificacao(s, e: models.Empresa, ajustes: dict):
     return produtos, classif.conflitos(docs, e.cnpj, ajustes, anexos, declaracoes, aliquota)
 
 
+PRODUTOS_POR_PAGINA = 100   # a tela inteira de uma loja grande passava de 15 mil linhas e travava o navegador
+
+
+def _paginar(lista: list, pagina: int) -> dict:
+    """Fatia da página pedida e os dados do rodapé de paginação (templates/_paginacao.html)."""
+    paginas = max(1, -(-len(lista) // PRODUTOS_POR_PAGINA))
+    pagina = min(max(pagina, 1), paginas)
+    itens = lista[(pagina - 1) * PRODUTOS_POR_PAGINA:pagina * PRODUTOS_POR_PAGINA]
+    return {"itens": itens, "pagina": pagina, "paginas": paginas, "filtrados": len(lista),
+            "primeiro": (pagina - 1) * PRODUTOS_POR_PAGINA + 1, "ultimo": (pagina - 1) * PRODUTOS_POR_PAGINA + len(itens)}
+
+
+def _bate_busca(busca: str, *campos) -> bool:
+    return not busca or busca in " ".join(c for c in campos if c).lower()
+
+
 @app.get("/empresas/{empresa_id}/classificacao", response_class=HTMLResponse)
-def tela_classificacao(request: Request, empresa_id: int):
+def tela_classificacao(request: Request, empresa_id: int, q: str = "", padrao: bool = False, pagina: int = 1):
     with db.sessao() as s:
         e = _carregar(s, empresa_id)
         registros = {c.chave: c for c in s.scalars(select(models.ClassificacaoProduto)
                                                    .where(models.ClassificacaoProduto.empresa_id == e.id))}
-        produtos, conflitos = _produtos_classificacao(s, e, {k: (v.cst, v.cclasstrib) for k, v in registros.items()})
+        todos, conflitos = _produtos_classificacao(s, e, {k: (v.cst, v.cclasstrib) for k, v in registros.items()})
+    busca = q.strip().lower()
+    pag = _paginar([p for p in todos if (not padrao or p.origem == "padrao")
+                    and _bate_busca(busca, p.gtin, *p.codigos, p.descricao, *p.ncms)], pagina)
+    produtos = pag["itens"]
     validacoes = {}
     for p in produtos:
         reg = None
@@ -308,8 +350,9 @@ def tela_classificacao(request: Request, empresa_id: int):
     except ErroCalculadora:
         situacoes = {}
     return _render(request, "classificacao.html", e=e, produtos=produtos, validacoes=validacoes,
-                   situacoes=situacoes, sugestoes_ean=sum(1 for p in produtos if p.sugestao_por_ean),
-                   conflitos=conflitos,
+                   situacoes=situacoes, sugestoes_ean=sum(1 for p in todos if p.sugestao_por_ean),
+                   conflitos=conflitos, total_produtos=len(todos), pag=pag, q=q, padrao=padrao,
+                   consulta=urlencode({"q": q, **({"padrao": 1} if padrao else {})}),
                    avisos=AVISOS.pop(e.id, []), aba="classificacao")
 
 
@@ -345,7 +388,7 @@ async def salvar_classificacoes(request: Request, empresa_id: int):
 
     salvos, problemas = await run_in_threadpool(executar)
     _avisar(empresa_id, f"{salvos} classificação(ões) gravada(s).", *problemas)
-    return _ir(empresa_id, "/classificacao")
+    return _ir(empresa_id, "/classificacao" + (f"?{request.url.query}" if request.url.query else ""))
 
 
 @app.post("/empresas/{empresa_id}/classificacao/sugestoes-ean")
@@ -355,7 +398,8 @@ async def aplicar_sugestoes_ean(empresa_id: int):
         aplicadas, problemas = 0, []
         with db.sessao() as s:
             e = _carregar(s, empresa_id)
-            for p in classif.produtos(servicos.documentos(s, e), e.cnpj, servicos.classificacoes(s, e)):
+            docs = _base_classificacao(s, e)[0]
+            for p in classif.produtos(docs, e.cnpj, servicos.classificacoes(s, e)):
                 if p.sugestao_por_ean and p.origem != "manual":
                     cst, cct = p.sugestao
                     motivo = classif.validar(calculadora, p.ncm, cst, cct)
@@ -434,21 +478,58 @@ def _comparar_simples(empresa_id: int, e: models.Empresa, a, inicio: date | None
         return servicos.comparar_simples(s, s.get(models.Empresa, empresa_id), calculadora, a, inicio, fim)
 
 
-_CACHE_ANALISES: dict[tuple, tuple] = {}
+# Análises prontas, da usada há mais tempo para a mais recente. Cada uma ocupa centenas de MB: guardar uma por
+# filtro de data, sem limite, esgotaria a memória da máquina.
+_CACHE_ANALISES: OrderedDict[tuple, tuple] = OrderedDict()
+_MAX_ANALISES_EM_CACHE = 4
+_TRAVA_CACHE = threading.Lock()
+
+
+def _do_cache(chave: tuple, assinatura: tuple):
+    with _TRAVA_CACHE:
+        guardado = _CACHE_ANALISES.get(chave)
+        if not guardado or guardado[0] != assinatura:
+            return None
+        _CACHE_ANALISES.move_to_end(chave)
+        return guardado[1]
+
+
+def _guardar(chave: tuple, assinatura: tuple, analise):
+    with _TRAVA_CACHE:
+        _CACHE_ANALISES[chave] = (assinatura, analise)
+        _CACHE_ANALISES.move_to_end(chave)
+        while len(_CACHE_ANALISES) > _MAX_ANALISES_EM_CACHE:
+            _CACHE_ANALISES.popitem(last=False)
+
+
+_TRAVAS: dict[tuple, threading.Lock] = {}
+_TRAVA_TRAVAS = threading.Lock()
+
+
+def _trava(chave: tuple) -> threading.Lock:
+    """Uma análise por vez para cada chave: cliques repetidos esperam o cálculo em andamento e pegam o resultado do
+    cache, em vez de disparar em paralelo o mesmo cálculo de minutos."""
+    with _TRAVA_TRAVAS:
+        return _TRAVAS.setdefault(chave, threading.Lock())
+
+
+def _assinatura_das_notas(s, e: models.Empresa) -> tuple:
+    """Muda quando entram notas ou NFC-e consolidadas, ou quando muda a calculadora ou a sua base de regras."""
+    docs = s.execute(select(func.count(), func.max(models.DocumentoFiscal.id),
+                            func.sum(case((models.DocumentoFiscal.situacao == "completo", 1), else_=0)))
+                     .where(models.DocumentoFiscal.empresa_id == e.id)).one()
+    nfce = s.execute(select(func.count(), func.max(models.ConsolidadoNFCe.atualizado_em), func.sum(
+        models.ConsolidadoNFCe.cupons)).where(models.ConsolidadoNFCe.empresa_id == e.id)).one()
+    return (tuple(docs), tuple(nfce), settings.calculadora_url,
+            calculadora.identificacao().get("versao_base"))  # nova base de regras (ex.: alíquotas publicadas)
 
 
 def _assinatura_dos_dados(s, e: models.Empresa) -> tuple:
     """Muda sempre que notas, classificações ou premissas mudam — invalida o cache da análise."""
-    docs = s.execute(select(func.count(), func.max(models.DocumentoFiscal.id),
-                            func.sum(case((models.DocumentoFiscal.situacao == "completo", 1), else_=0)))
-                     .where(models.DocumentoFiscal.empresa_id == e.id)).one()
     classes = s.execute(select(func.count(), func.max(models.ClassificacaoProduto.atualizado_em))
                         .where(models.ClassificacaoProduto.empresa_id == e.id)).one()
-    nfce = s.execute(select(func.count(), func.max(models.ConsolidadoNFCe.atualizado_em), func.sum(
-        models.ConsolidadoNFCe.cupons)).where(models.ConsolidadoNFCe.empresa_id == e.id)).one()
-    return (tuple(docs), tuple(classes), tuple(nfce), json.dumps(e.premissas or {}, sort_keys=True), e.regime, e.industria,
-            e.uf, e.cod_municipio, settings.calculadora_url,
-            calculadora.identificacao().get("versao_base"))  # nova base de regras (ex.: alíquotas publicadas)
+    return (_assinatura_das_notas(s, e), tuple(classes), json.dumps(e.premissas or {}, sort_keys=True), e.regime,
+            e.industria, e.uf, e.cod_municipio)
 
 
 def _analise(empresa_id: int, inicio: date | None, fim: date | None):
@@ -467,13 +548,13 @@ def _analise_sem_tratamento(empresa_id: int, inicio: date | None, fim: date | No
     with db.sessao() as s:
         e = _carregar(s, empresa_id)
         chave = (empresa_id, inicio, fim)
-        assinatura = _assinatura_dos_dados(s, e)
-        guardado = _CACHE_ANALISES.get(chave)
-        if guardado and guardado[0] == assinatura:
-            return e, guardado[1]
-        a = servicos.montar_analise(s, e, calculadora, inicio, fim)
-        _CACHE_ANALISES[chave] = (assinatura, a)
-        return e, a
+        with _trava(chave):
+            assinatura = _assinatura_dos_dados(s, e)
+            a = _do_cache(chave, assinatura)
+            if a is None:
+                a = servicos.montar_analise(s, e, calculadora, inicio, fim)
+                _guardar(chave, assinatura, a)
+            return e, a
 
 
 def _ano(ano: int | None, a) -> int:
@@ -512,13 +593,13 @@ def _analise_grupo_sem_tratamento(raiz: str, inicio: date | None, fim: date | No
         if not empresas:
             raise HTTPException(404, "Nenhuma empresa com essa raiz de CNPJ")
         chave = ("grupo", raiz, inicio, fim)
-        assinatura = tuple(_assinatura_dos_dados(s, e) for e in empresas)
-        guardado = _CACHE_ANALISES.get(chave)
-        if guardado and guardado[0] == assinatura:
-            return _Grupo(empresas), guardado[1]
-        a = servicos.montar_analise_grupo(s, empresas, calculadora, inicio, fim)
-        _CACHE_ANALISES[chave] = (assinatura, a)
-        return _Grupo(empresas), a
+        with _trava(chave):
+            assinatura = tuple(_assinatura_dos_dados(s, e) for e in empresas)
+            a = _do_cache(chave, assinatura)
+            if a is None:
+                a = servicos.montar_analise_grupo(s, empresas, calculadora, inicio, fim)
+                _guardar(chave, assinatura, a)
+            return _Grupo(empresas), a
 
 
 # --- Fornecedores e produtos (negociação) --------------------------------------------------------------------------
@@ -565,19 +646,24 @@ async def tela_fornecedor(request: Request, empresa_id: int, cnpj: str, ano: int
 
 
 def _pagina_produtos(request: Request, e, a, base: str, ano: int | None, inicio: str | None, fim: str | None,
-                     **extra):
+                     q: str = "", multi: bool = False, pagina: int = 1, **extra):
     ano = _ano(ano, a)
     lista = negociacao.produtos(a, negociacao.compras(a, ano), ano)
-    return _render(request, "produtos.html", e=e, base=base, a=a, aba="produtos", ano=ano, produtos=lista,
+    busca = q.strip().lower()
+    pag = _paginar([p for p in lista if (not multi or (p.fornecedores or 0) > 1)
+                    and _bate_busca(busca, p.gtin, *p.codigos, p.descricao, p.ncm)], pagina)
+    consulta = urlencode({"ano": ano, "inicio": inicio or "", "fim": fim or "", "q": q, **({"multi": 1} if multi else {})})
+    return _render(request, "produtos.html", e=e, base=base, a=a, aba="produtos", ano=ano, produtos=pag["itens"],
+                   pag=pag, total_produtos=len(lista), q=q, multi=multi, consulta=consulta,
                    inicio=inicio or "", fim=fim or "", **extra)
 
 
 @app.get("/empresas/{empresa_id}/produtos", response_class=HTMLResponse)
 async def tela_produtos(request: Request, empresa_id: int, ano: int | None = None, inicio: str | None = None,
-                        fim: str | None = None):
+                        fim: str | None = None, q: str = "", multi: bool = False, pagina: int = 1):
     di, df = _periodo(inicio, fim)
     e, a = await run_in_threadpool(_analise, empresa_id, di, df)
-    return _pagina_produtos(request, e, a, f"/empresas/{empresa_id}", ano, inicio, fim)
+    return _pagina_produtos(request, e, a, f"/empresas/{empresa_id}", ano, inicio, fim, q, multi, pagina)
 
 
 def _pagina_produto(request: Request, e, a, base: str, chave: str, ano: int | None, inicio: str | None,
@@ -688,10 +774,10 @@ async def tela_fornecedor_grupo(request: Request, raiz: str, cnpj: str, ano: int
 
 @app.get("/grupos/{raiz}/produtos", response_class=HTMLResponse)
 async def tela_produtos_grupo(request: Request, raiz: str, ano: int | None = None, inicio: str | None = None,
-                              fim: str | None = None):
+                              fim: str | None = None, q: str = "", multi: bool = False, pagina: int = 1):
     di, df = _periodo(inicio, fim)
     g, a = await run_in_threadpool(_analise_grupo, raiz, di, df)
-    return _pagina_produtos(request, g, a, f"/grupos/{raiz}", ano, inicio, fim, grupo=g)
+    return _pagina_produtos(request, g, a, f"/grupos/{raiz}", ano, inicio, fim, q, multi, pagina, grupo=g)
 
 
 @app.get("/grupos/{raiz}/produtos/{chave}", response_class=HTMLResponse)

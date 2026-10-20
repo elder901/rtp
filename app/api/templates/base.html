@@ -4,16 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RTP — Reforma Tributária</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root { color-scheme: light; --fundo:#f6f7f9; --card:#fff; --texto:#1c2430; --suave:#5b6675; --borda:#e1e5ea;
-          --azul:#1f3864; --serie:#2a78d6; --neutro:#a8acb3; --grade:#e8ebef; --sobe:#b42318; --desce:#067647;
-          --aviso-fundo:#fffaeb; --aviso-borda:#fedf89; --tag:#eef2f6;
-          --menu-fundo:#1f3864; --menu-texto:#dfe6f2; --menu-suave:#9fb0cc; --menu-ativo:#2d4a7c; --menu-largura:240px; }
+  :root { color-scheme: light; --fundo:#f5f7f8; --card:#fff; --texto:#1d2730; --suave:#5b6975; --borda:#e0e5e8;
+          --azul:#2c3b47; --serie:#17807d; --neutro:#a8acb3; --grade:#e8ebef; --sobe:#b42318; --desce:#067647;
+          --aviso-fundo:#fffaeb; --aviso-borda:#fedf89; --tag:#eef2f4;
+          --menu-fundo:#2c3b47; --menu-texto:#dde7eb; --menu-suave:#8fa5b0; --menu-ativo:#17807d; --menu-largura:240px; }
   @media (prefers-color-scheme: dark) {
-    :root:where(:not([data-theme="light"])) { color-scheme: dark; --fundo:#121417; --card:#1a1c20; --texto:#eceef1;
-      --suave:#a3abb7; --borda:#2c3038; --azul:#24406f; --serie:#3987e5; --neutro:#6b7079; --grade:#262a31;
-      --sobe:#f97066; --desce:#47cd89; --aviso-fundo:#2a2414; --aviso-borda:#5c4a17; --tag:#262a31;
-      --menu-fundo:#161b26; --menu-texto:#dfe6f2; --menu-suave:#8b97ab; --menu-ativo:#24406f; }
+    :root:where(:not([data-theme="light"])) { color-scheme: dark; --fundo:#141b21; --card:#1c252d; --texto:#eceef1;
+      --suave:#a3aeb7; --borda:#2d3840; --azul:#1f7a77; --serie:#5cc1bf; --neutro:#6b7079; --grade:#28323a;
+      --sobe:#f97066; --desce:#47cd89; --aviso-fundo:#2a2414; --aviso-borda:#5c4a17; --tag:#28323a;
+      --menu-fundo:#10171d; --menu-texto:#dde7eb; --menu-suave:#8fa5b0; --menu-ativo:#1f7a77; }
   }
   * { box-sizing:border-box; }
   body { margin:0; font:14px/1.5 system-ui, "Segoe UI", sans-serif; background:var(--fundo); color:var(--texto); }
@@ -23,9 +26,10 @@
   .app { display:grid; grid-template-columns:var(--menu-largura) minmax(0,1fr); min-height:100vh; }
   .lateral { background:var(--menu-fundo); color:var(--menu-texto); position:sticky; top:0; height:100vh;
              overflow-y:auto; display:flex; flex-direction:column; }
-  .lateral .marca { display:block; padding:18px 20px 14px; color:#fff; text-decoration:none; font-weight:700; font-size:16px;
+  .lateral .marca { display:block; padding:18px 20px 14px; color:#57c1bf; text-decoration:none; font-weight:700; font-size:18px;
                     line-height:1.2; }
-  .lateral .marca small { display:block; font-weight:500; font-size:12px; color:var(--menu-suave); margin-top:2px; }
+  .lateral .marca small { display:block; font-weight:500; font-size:10px; color:#fff; margin-top:3px;
+                          letter-spacing:.14em; text-transform:uppercase; }
   .lateral nav { display:flex; flex-direction:column; padding:4px 10px 16px; gap:2px; }
   .lateral nav a { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:6px; color:var(--menu-texto);
                    text-decoration:none; font-weight:500; }
@@ -43,7 +47,10 @@
   .titulo-empresa { margin-bottom:16px; }
 
   .card { background:var(--card); border:1px solid var(--borda); border-radius:8px; padding:20px; margin-bottom:20px; }
-  h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:16px; margin:0 0 12px; } h3 { font-size:14px; margin:16px 0 8px; }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:17px; margin:0 0 12px; } h3 { font-size:14px; margin:16px 0 8px; }
+  h1, h2, .lateral .marca { font-family:"Oswald", "Segoe UI Semibold", system-ui, sans-serif; text-transform:uppercase;
+                            letter-spacing:.03em; font-weight:600; }
+  h1 { color:var(--azul); } @media (prefers-color-scheme: dark) { :root:where(:not([data-theme="light"])) h1 { color:var(--texto); } }
   .suave { color:var(--suave); }
   .grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr)); gap:12px; }
   .colunas { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(340px,100%),1fr)); gap:20px; }
@@ -85,6 +92,19 @@
   .so-celular { display:none; }
   .dica { position:absolute; pointer-events:none; background:var(--card); border:1px solid var(--borda); border-radius:6px;
           padding:6px 10px; font-size:12px; box-shadow:0 2px 8px rgba(0,0,0,.12); display:none; white-space:nowrap; }
+
+  /* ---- Carregando: feedback nas navegações (a 1ª abertura de uma análise recalcula tudo e demora) ---- */
+  /* sem backdrop-filter: desfocar páginas com centenas de milhares de elementos trava a renderização */
+  .carregando { position:fixed; inset:0; z-index:60; background:color-mix(in srgb, var(--fundo) 80%, transparent);
+                display:flex; flex-direction:column; align-items:center; justify-content:center;
+                gap:14px; text-align:center; padding:24px; }
+  .carregando[hidden] { display:none; }
+  .carregando .giro { width:34px; height:34px; border-radius:50%; border:4px solid var(--borda);
+                      border-top-color:#57c1bf; animation:girar .8s linear infinite; }
+  .carregando p { margin:0; max-width:420px; font-weight:600; }
+  .carregando small { color:var(--suave); }
+  @keyframes girar { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .carregando .giro { animation-duration:1.6s; } }
 
   /* ---- Tablet e celular: barra lateral vira gaveta aberta pelo botão ☰ ---- */
   @media (max-width: 1023px) {
@@ -182,6 +202,11 @@
   <div class="titulo">{{ titulo_secao }}{% if e is defined %}<small>{{ e.nome }}</small>{% endif %}</div>
 </header>
 <div class="fundo-menu" data-menu="fechar"></div>
+<div class="carregando" id="carregando" hidden role="status">
+  <div class="giro" aria-hidden="true"></div>
+  <p>Carregando…<br><small>A primeira abertura de uma análise processa todas as notas e pode levar alguns
+  minutos; depois fica em cache e abre na hora.</small></p>
+</div>
 
 <div class="app">
   <aside class="lateral" id="menu-lateral" aria-label="Menu">
@@ -245,6 +270,17 @@
   botaoMenu.addEventListener('click', () => menu(true));
   document.querySelectorAll('[data-menu="fechar"]').forEach(el => el.addEventListener('click', () => menu(false)));
   document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && document.body.classList.contains('menu-aberto')) menu(false); });
+
+  // Feedback de navegação: links internos (menos downloads) e formulários GET mostram o aviso de carregamento.
+  const carregando = document.getElementById('carregando');
+  document.addEventListener('click', ev => {
+    const a = ev.target.closest('a[href]');
+    if (!a || ev.defaultPrevented || a.target === '_blank' || a.origin !== location.origin) return;
+    if (/\.(xlsx|csv)(\?|$)/.test(a.pathname + a.search) || a.getAttribute('href').startsWith('#')) return;
+    carregando.hidden = false;
+  });
+  document.addEventListener('submit', ev => { if (ev.target.method !== 'post') carregando.hidden = false; });
+  window.addEventListener('pageshow', () => { carregando.hidden = true; });  // volta do histórico (bfcache)
 
   // Tabelas: guarda o título de cada coluna em data-rotulo para virarem cartões no celular (ver CSS acima).
   document.querySelectorAll('.tabela table').forEach(tabela => {

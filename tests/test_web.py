@@ -55,6 +55,13 @@ def test_fluxo_completo(banco, monkeypatch):
     conflitos = c.get(url + "/classificacao/conflitos.csv")
     assert conflitos.status_code == 200 and conflitos.text.lstrip("﻿").startswith("chave;ean;descricao;ncm;tipo")
 
+    # Busca e paginação no servidor: uma loja grande tem dezenas de milhares de produtos
+    filtrada = c.get(url + "/classificacao", params={"q": "v-arz5"}).text
+    assert "V-ARZ5" in filtrada and "(filtrados de" in filtrada
+    monkeypatch.setattr(main, "PRODUTOS_POR_PAGINA", 1)
+    segunda = c.get(url + "/classificacao?pagina=2").text
+    assert "Produtos 2–2 de" in segunda and "página 2 de" in segunda and "← Anterior" in segunda
+
     painel = c.get(url + "/analise?anos=2027,2033")
     assert painel.status_code == 200
     assert "Saldo a recolher por ano da transição" in painel.text and "<svg" in painel.text

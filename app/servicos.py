@@ -9,7 +9,7 @@ from decimal import Decimal
 from sqlalchemy import and_, func, not_, or_, select
 from sqlalchemy.orm import Session
 
-from app import models
+from app import cobertura, models
 from app.calculadora.client import CalculadoraRTC
 from app.dfe.certificado import CertificadoA1, CertificadoInvalido
 from app.engine.cenarios import Analise, Empresa, analisar
@@ -273,12 +273,22 @@ def salvar_classificacao(s: Session, e: models.Empresa, chave: str, cst: str, cc
 def montar_analise(s: Session, e: models.Empresa, calculadora: CalculadoraRTC, inicio: date | None = None,
                    fim: date | None = None, anos: list[int] | None = None,
                    docs: list[Documento] | None = None, regime: str | None = None) -> Analise:
-    """`regime` permite simular a mesma base em outro regime (ex.: Simples optando por CBS/IBS regular)."""
+    """`regime` permite simular a mesma base em outro regime (ex.: Simples optando por CBS/IBS regular). Sem período,
+    usa os 12 meses até o último mês com notas (cobertura.periodo_padrao)."""
     empresa = empresa_do_motor(e)
     if regime:
         empresa.regime = regime
-    return analisar(empresa, docs if docs is not None else documentos(s, e, inicio, fim),
-                    premissas_da_empresa(e, anos), calculadora, classificacoes(s, e))
+    avisos = []
+    if docs is None:
+        cob = cobertura.levantar(s, [e])
+        if inicio is None and fim is None:
+            inicio, fim = cobertura.periodo_padrao(cob)
+        avisos = cobertura.alertas(cob, inicio, fim)
+    a = analisar(empresa, docs if docs is not None else documentos(s, e, inicio, fim),
+                 premissas_da_empresa(e, anos), calculadora, classificacoes(s, e))
+    a.periodo = (inicio, fim)
+    a.alertas[:0] = avisos
+    return a
 
 
 def montar_analise_grupo(s: Session, empresas: list[models.Empresa], calculadora: CalculadoraRTC,
@@ -289,6 +299,9 @@ def montar_analise_grupo(s: Session, empresas: list[models.Empresa], calculadora
     classificações dos estabelecimentos são mescladas e, em conflito, vale a da matriz."""
     matriz = empresas[0]
     raiz = raiz_cnpj(matriz.cnpj)
+    cob = cobertura.levantar(s, empresas)
+    if inicio is None and fim is None:
+        inicio, fim = cobertura.periodo_padrao(cob)
     docs: list[Documento] = []
     vistas: set[str] = set()
     internas = 0
@@ -305,10 +318,13 @@ def montar_analise_grupo(s: Session, empresas: list[models.Empresa], calculadora
     ajustes: dict[str, tuple[str, str]] = {}
     for e in reversed(empresas):           # matriz (primeira da lista) prevalece
         ajustes.update(classificacoes(s, e))
-    a = analisar(empresa_do_motor(matriz), docs, premissas_da_empresa(matriz), calculadora, ajustes)
+    a = analisar(empresa_do_motor(matriz), docs, premissas_da_empresa(matriz), calculadora, ajustes,
+                 estabelecimentos={e.cnpj for e in empresas})
     if internas:
         a.alertas.insert(0, f"{internas} nota(s) entre estabelecimentos do próprio grupo ficaram fora da visão "
                             f"consolidada: transferência interna não é compra nem venda da empresa como um todo.")
+    a.alertas[:0] = cobertura.alertas(cob, inicio, fim)
+    a.periodo = (inicio, fim)
     return a
 
 

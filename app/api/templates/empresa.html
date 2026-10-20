@@ -16,6 +16,24 @@
   {% endif %}
 </div>
 
+{% if cobertura.meses %}
+<div class="card">
+  <h2>Cobertura por mês</h2>
+  <p class="suave">O que está importado em cada mês. A análise só vale se vendas e compras estiverem completas: confira
+    com o faturamento e as compras do período.</p>
+  {% for t in alertas_cobertura %}<div class="alerta">{{ t }}</div>{% endfor %}
+  <div class="tabela"><table>
+    <tr><th class="txt">Mês</th><th>Cupons (NFC-e)</th><th>NF-e de venda</th><th>Vendas</th><th>NF-e de compra</th>
+        <th>Compras de terceiros</th><th>Recebido do grupo</th><th>Enviado ao grupo</th></tr>
+    {% for mes, m in cobertura.meses.items() %}
+    <tr><td class="txt">{{ mes[5:] }}/{{ mes[:4] }}</td><td>{{ m.cupons }}</td><td>{{ m.nfe_saidas }}</td>
+        <td>{{ m.vendas|brl }}</td><td>{{ m.nfe_entradas }}</td><td>{{ m.compras|brl }}</td>
+        <td>{{ m.entradas_grupo|brl if m.entradas_grupo else '—' }}</td><td>{{ m.saidas_grupo|brl if m.saidas_grupo else '—' }}</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+{% endif %}
+
 <div class="colunas">
   <div class="card">
     <h2>SEFAZ — distribuição DF-e</h2>

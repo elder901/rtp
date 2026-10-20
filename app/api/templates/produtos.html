@@ -8,14 +8,21 @@
 {% block conteudo %}
 <div class="card">
   {% include "_filtros.html" %}
-  <div class="acoes"><input id="filtro" placeholder="Filtrar por EAN, código, descrição ou NCM" style="max-width:340px">
-    <label class="check"><input type="checkbox" id="multi"> Só com mais de um fornecedor</label></div>
+  <form method="get" class="acoes">
+    <input type="hidden" name="ano" value="{{ ano }}"><input type="hidden" name="inicio" value="{{ inicio }}">
+    <input type="hidden" name="fim" value="{{ fim }}">
+    <input name="q" value="{{ q }}" placeholder="Buscar por EAN, código, descrição ou NCM" style="max-width:340px">
+    <label class="check"><input type="checkbox" name="multi" value="1" {{ 'checked' if multi }}> Só com mais de um fornecedor</label>
+    <button type="submit" class="secundario">Filtrar</button>
+    {% if q or multi %}<a href="?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">Limpar filtro</a>{% endif %}
+  </form>
   <p class="suave" style="margin-bottom:0"><b>Margem</b> = valor líquido unitário da venda − custo efetivo unitário da compra
     (mesmo EAN e unidade). <b>Se os preços não mudarem</b>: gôndola e fornecedores mantêm os preços de hoje.</p>
 </div>
 
 <div class="card">
   <h2>Produtos — preço, custo e margem por EAN, hoje × {{ ano }}</h2>
+  {% include "_paginacao.html" %}
   <div class="tabela"><table id="tabela">
     <tr><th class="txt">Produto</th><th class="txt">EAN</th><th class="txt">cClassTrib</th><th class="txt">Un.</th>
         <th>Preço de venda unit.</th><th>Carga venda hoje</th><th>Carga {{ ano }}</th><th>Δ preço (receita mantida)</th>
@@ -23,7 +30,7 @@
         <th>Margem hoje</th><th>Margem {{ ano }} se os preços não mudarem</th></tr>
     {% for p in produtos %}
     {% set m = p.margem_ano_precos_hoje(ano) %}{% set cen = p.cenarios_preco(ano) %}
-    <tr data-busca="{{ (p.gtin ~ ' ' ~ p.codigos|join(' ') ~ ' ' ~ p.descricao ~ ' ' ~ p.ncm)|lower }}" data-forn="{{ p.fornecedores }}">
+    <tr>
       <td class="txt quebra"><a href="{{ base }}/produtos/{{ p.chave }}?ano={{ ano }}&inicio={{ inicio }}&fim={{ fim }}">{{ p.descricao }}</a>
         <br><span class="suave">{{ p.codigos|join(', ') }} · NCM {{ p.ncm }}</span></td>
       <td class="txt" style="font-family:monospace">{{ p.gtin or '—' }}</td>
@@ -37,17 +44,8 @@
       <td>{% if cen and cen[0].margem is not none %}{{ cen[0].margem|brl }} <span class="suave">({{ cen[0].margem_pct|pct }})</span>{% else %}—{% endif %}</td>
       <td>{% if m and m.margem is not none %}<span class="{{ 'sobe' if m.margem < cen[0].margem else 'desce' if m.margem > cen[0].margem }}">{{ m.margem|brl }}</span>
           <span class="suave">({{ m.margem_pct|pct }})</span>{% else %}—{% endif %}</td></tr>
-    {% else %}<tr><td colspan="13" class="txt suave">Nenhum produto no período.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="13" class="txt suave">{{ 'Nenhum produto com esse filtro.' if total_produtos else 'Nenhum produto no período.' }}</td></tr>{% endfor %}
   </table></div>
+  {% include "_paginacao.html" %}
 </div>
-<script>
-  const filtro = document.getElementById('filtro'), multi = document.getElementById('multi');
-  function filtrar() {
-    const q = filtro.value.trim().toLowerCase();
-    document.querySelectorAll('#tabela tr[data-busca]').forEach(tr => {
-      tr.hidden = (q && !tr.dataset.busca.includes(q)) || (multi.checked && Number(tr.dataset.forn) < 2);
-    });
-  }
-  filtro.addEventListener('input', filtrar); multi.addEventListener('change', filtrar);
-</script>
 {% endblock %}

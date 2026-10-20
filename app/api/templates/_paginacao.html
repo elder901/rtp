@@ -1,0 +1,10 @@
+{# Rodapé de paginação: espera pag (de _paginar), consulta (query string sem a página) e total_produtos. #}
+<div class="acoes" style="justify-content:space-between">
+  <span class="suave">{% if pag.filtrados %}Produtos {{ pag.primeiro }}–{{ pag.ultimo }} de {{ pag.filtrados }}
+    {%- if pag.filtrados != total_produtos %} (filtrados de {{ total_produtos }}){% endif %}{% else %}Nenhum produto{% endif %}</span>
+  {% if pag.paginas > 1 %}<span class="acoes" style="margin:0">
+    {% if pag.pagina > 1 %}<a class="botao secundario" href="?{{ consulta }}&pagina={{ pag.pagina - 1 }}">← Anterior</a>{% endif %}
+    <span>página {{ pag.pagina }} de {{ pag.paginas }}</span>
+    {% if pag.pagina < pag.paginas %}<a class="botao secundario" href="?{{ consulta }}&pagina={{ pag.pagina + 1 }}">Próxima →</a>{% endif %}
+  </span>{% endif %}
+</div>

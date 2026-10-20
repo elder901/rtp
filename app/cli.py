@@ -12,6 +12,8 @@
   python -m app.cli certificado --cnpj 11222333000181 --pfx C:/certs/loja.pfx      (senha pedida no terminal)
   python -m app.cli dfe [--cnpj 11222333000181]                                     (ideal para o Agendador do Windows)
   python -m app.cli relatorio --cnpj 11222333000181 --inicio 2026-01-01 --fim 2026-06-30 --saida relatorios/loja.xlsx
+  python -m app.cli exportar-xml --raiz 11222333 --destino E:/RTP/tenants [--inicio 2026-01-01] [--fim 2026-09-30]
+      (pasta por tenant: um diretório por estabelecimento da raiz, com os XMLs por modelo, mês e entrada/saída)
   python -m app.cli apuracao credencial --cnpj ... --client-id ... [--ambiente prr|pro]   (secret pedido no terminal)
   python -m app.cli apuracao solicitar --cnpj ... --tipo debitos|creditos
   python -m app.cli apuracao verificar [--cnpj ...]
@@ -299,6 +301,20 @@ def cmd_relatorio(a):
     _imprimir_resumo(analise, a.saida)
 
 
+def cmd_exportar_xml(a):
+    from app.exportacao import exportar_tenant
+
+    raiz = servicos.raiz_cnpj(a.raiz or a.cnpj or "")
+    if len(raiz) != 8:
+        sys.exit("Informe --raiz (8 dígitos) ou --cnpj de um dos estabelecimentos.")
+    with db.sessao() as s:
+        try:
+            pasta = exportar_tenant(s, raiz, a.destino, a.inicio, a.fim)
+        except ValueError as erro:
+            sys.exit(str(erro))
+    print(f"Pasta do tenant: {pasta.resolve()}")
+
+
 def cmd_apuracao(a):
     import json
 
@@ -485,6 +501,14 @@ def main(argv: list[str] | None = None):
     pr.add_argument("--saida", type=Path, default=Path("relatorios/analise.xlsx"))
     pr.add_argument("--calculadora-url")
     pr.set_defaults(func=cmd_relatorio)
+
+    px = sub.add_parser("exportar-xml", help="gravar os XMLs do banco numa pasta por tenant (raiz do CNPJ)")
+    px.add_argument("--raiz", help="8 primeiros dígitos do CNPJ (todos os estabelecimentos)")
+    px.add_argument("--cnpj", help="CNPJ de um dos estabelecimentos (usa a raiz dele)")
+    px.add_argument("--destino", type=Path, default=Path("dados/tenants"))
+    px.add_argument("--inicio", type=date.fromisoformat)
+    px.add_argument("--fim", type=date.fromisoformat)
+    px.set_defaults(func=cmd_exportar_xml)
 
     pp = sub.add_parser("apuracao", help="API de apuração da CBS da Receita e conciliação")
     pp.add_argument("acao", choices=["credencial", "solicitar", "verificar", "importar", "conciliar"])

@@ -6,15 +6,21 @@
   {%- else %}0%{% endif -%}
 {%- endmacro %}
 {% block conteudo %}
+{% set p_ini = inicio or (a.periodo[0].isoformat() if a.periodo[0] else '') %}
+{% set p_fim = fim or (a.periodo[1].isoformat() if a.periodo[1] else '') %}
 <div class="card">
   <form method="get" class="grade" style="align-items:end">
-    <div><label>Emissão de</label><input type="date" name="inicio" value="{{ inicio }}"></div>
-    <div><label>até</label><input type="date" name="fim" value="{{ fim }}"></div>
+    <div><label>Emissão de</label><input type="date" name="inicio" value="{{ p_ini }}"></div>
+    <div><label>até</label><input type="date" name="fim" value="{{ p_fim }}"></div>
     <div><label>Anos nas tabelas</label><input name="anos" value="{{ anos_texto }}" placeholder="2027,2029,2033"></div>
     <div class="acoes" style="margin:0"><button type="submit">Atualizar</button>
-      <a class="botao secundario" href="{{ base }}/analise/excel?inicio={{ inicio }}&fim={{ fim }}">Excel completo</a></div>
+      <a class="botao secundario" href="{{ base }}/analise/excel?inicio={{ p_ini }}&fim={{ p_fim }}">Excel completo</a></div>
   </form>
-  <p class="suave" style="margin-bottom:0">{{ a.itens|length }} itens analisados ·
+  <p class="suave" style="margin-bottom:0">{% if a.periodo[0] or a.periodo[1] %}Período:
+    <b>{% if a.periodo[0] and a.periodo[1] %}{{ a.periodo[0].strftime('%d/%m/%Y') }} a {{ a.periodo[1].strftime('%d/%m/%Y') }}
+    {%- elif a.periodo[0] %}a partir de {{ a.periodo[0].strftime('%d/%m/%Y') }}
+    {%- else %}até {{ a.periodo[1].strftime('%d/%m/%Y') }}{% endif %}</b>{% if not inicio and not fim %} (padrão: 12 meses até o último mês com notas){% endif %} ·
+    {% endif %}{{ a.itens|length }} itens analisados ·
     CBS {{ a.premissas.cbs_referencia }}% · IBS {{ a.premissas.ibs_uf_referencia + a.premissas.ibs_mun_referencia }}% (premissas)<br>
     Calculadora RTC: {{ a.versao_calculadora }}</p>
 </div>

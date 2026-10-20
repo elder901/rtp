@@ -169,3 +169,21 @@ def test_cclasstrib_do_xml_incompativel_com_o_ncm_cai_para_anexo_ou_padrao():
     assert arroz.classificacao.origem == "padrao" and arroz.classificacao.cclasstrib == "000001"
     assert not any(al.erro for al in arroz.aliquotas.values())
     assert any("incompatível com o NCM" in t and "NCM 10063021 com 200003" in t for t in a.alertas)
+
+
+def test_visao_do_grupo_inclui_as_notas_das_filiais():
+    """Na análise consolidada a nota vale para o estabelecimento que a emitiu ou recebeu — antes, só a da matriz."""
+    from dataclasses import replace
+
+    docs = ler_caminho(FX).documentos
+    matriz, filial = "11222333000181", "11222333000262"
+    venda = next(d for d in docs if d.direcao_para(matriz) == "saida")
+    da_filial = replace(venda, chave="9" * 44, emitente=replace(venda.emitente, cnpj=filial))
+    empresa = Empresa(matriz, "LOJA TESTE", "real", "SP", 3550308)
+    so_matriz = analisar(empresa, [*docs, da_filial], Premissas(anos=[2027]), CalculadoraFake())
+    grupo = analisar(empresa, [*docs, da_filial], Premissas(anos=[2027]), CalculadoraFake(),
+                     estabelecimentos={matriz, filial})
+    assert not any(r.documento.chave == "9" * 44 for r in so_matriz.itens)
+    da_filial_no_grupo = [r for r in grupo.itens if r.documento.chave == "9" * 44]
+    assert da_filial_no_grupo and all(r.direcao == "saida" for r in da_filial_no_grupo)
+    assert len(grupo.itens) == len(so_matriz.itens) + len(da_filial_no_grupo)

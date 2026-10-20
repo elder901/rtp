@@ -98,6 +98,7 @@ class Analise:
     ignorados: int
     calculadora: dict = field(default_factory=dict)  # endereço e versão usados (rastreabilidade)
     aliquotas_usadas: dict = field(default_factory=dict)  # ano -> {"aliquotas": {...}, "origens": {...}}
+    periodo: tuple = (None, None)                          # emissões analisadas (início, fim)
 
     @property
     def versao_calculadora(self) -> str:
@@ -332,7 +333,10 @@ def _valor_is(item: Item, aliq: AliquotaEfetiva, direcao: str, p: Premissas,
 
 def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas,
              calculadora: CalculadoraRTC,
-             overrides: "dict[str, tuple[str, str]] | Classificacoes | None" = None) -> Analise:
+             overrides: "dict[str, tuple[str, str]] | Classificacoes | None" = None,
+             estabelecimentos: "set[str] | None" = None) -> Analise:
+    """`estabelecimentos`: CNPJs da mesma pessoa jurídica analisados como uma empresa só (visão do grupo). A nota
+    vale para o estabelecimento que a emitiu ou recebeu; UF, município e regime continuam os de `empresa`."""
     overrides = Classificacoes.de(overrides)
     if hasattr(calculadora, "versao"):
         calculadora.versao()  # confere antes de processar: sem calculadora não há análise (CalculadoraIndisponivel)
@@ -341,11 +345,15 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
     validos: list[tuple[str, Documento, Item, Participante]] = []
 
     for doc in documentos:
-        direcao = doc.direcao_para(empresa.cnpj)
+        cnpj = empresa.cnpj
+        if estabelecimentos:
+            participantes = (doc.emitente.cnpj, doc.destinatario.cnpj if doc.destinatario else "")
+            cnpj = next((c for c in participantes if c in estabelecimentos), cnpj)
+        direcao = doc.direcao_para(cnpj)
         if direcao is None:
-            alertas.append(f"NF {doc.numero} ({doc.arquivo}): CNPJ {empresa.cnpj} não é emitente nem destinatário — ignorada.")
+            alertas.append(f"NF {doc.numero} ({doc.arquivo}): CNPJ {cnpj} não é emitente nem destinatário — ignorada.")
             continue
-        contraparte = doc.contraparte_para(empresa.cnpj)
+        contraparte = doc.contraparte_para(cnpj)
         for item in doc.itens:
             if item.cfop[-3:] not in CFOP_ONEROSOS:
                 ignorados += 1
