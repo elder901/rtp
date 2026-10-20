@@ -514,13 +514,15 @@ def _trava(chave: tuple) -> threading.Lock:
 
 
 def _assinatura_das_notas(s, e: models.Empresa) -> tuple:
-    """Muda quando entram notas ou NFC-e consolidadas, ou quando muda a calculadora ou a sua base de regras."""
+    """Muda quando entram notas, NFC-e consolidadas ou SPED, ou quando muda a calculadora ou a sua base de regras."""
     docs = s.execute(select(func.count(), func.max(models.DocumentoFiscal.id),
                             func.sum(case((models.DocumentoFiscal.situacao == "completo", 1), else_=0)))
                      .where(models.DocumentoFiscal.empresa_id == e.id)).one()
     nfce = s.execute(select(func.count(), func.max(models.ConsolidadoNFCe.atualizado_em), func.sum(
         models.ConsolidadoNFCe.cupons)).where(models.ConsolidadoNFCe.empresa_id == e.id)).one()
-    return (tuple(docs), tuple(nfce), settings.calculadora_url,
+    sped = s.execute(select(func.count(), func.max(models.EscrituracaoArquivo.importado_em))
+                     .where(models.EscrituracaoArquivo.empresa_id == e.id)).one()
+    return (tuple(docs), tuple(nfce), tuple(sped), settings.calculadora_url,
             calculadora.identificacao().get("versao_base"))  # nova base de regras (ex.: alíquotas publicadas)
 
 

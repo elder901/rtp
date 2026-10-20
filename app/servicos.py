@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from decimal import Decimal
 
-from sqlalchemy import and_, func, not_, or_, select
+from sqlalchemy import and_, delete, func, insert, not_, or_, select
 from sqlalchemy.orm import Session
 
 from app import cobertura, models
@@ -14,6 +14,7 @@ from app.calculadora.client import CalculadoraRTC
 from app.dfe.certificado import CertificadoA1, CertificadoInvalido
 from app.engine.cenarios import Analise, Empresa, analisar
 from app.engine.premissas import Premissas
+from app.ingest import sped
 from app.ingest.arquivos import iterar_xmls
 from app.ingest.consolidacao import MODELO_NFCE, ConsolidadorNFCe, MesNFCe, de_json, documento_do_mes, para_json
 from app.parser.nfe import Documento, ler_nfe
@@ -177,6 +178,122 @@ def importar_arquivos(s: Session, e: models.Empresa, arquivos: list[tuple[str, b
     return res
 
 
+# --- SPED (notas escrituradas e créditos tomados) ----------------------------------------------------------------
+
+def importar_sped(s: Session, caminhos, desde: str | None = None, progresso=print) -> list[str]:
+    """Grava as notas de entrada e os créditos escriturados dos SPEDs encontrados em `caminhos` (pastas ou arquivos).
+    Cada (tipo, estabelecimento, competência) é substituído por inteiro a cada importação."""
+    por_cnpj = {e.cnpj: e for e in s.scalars(select(models.Empresa))}
+    relatorio = []
+    for cab in sped.arquivos(caminhos, desde):
+        if cab.tipo == "fiscal":
+            alvos = [por_cnpj[cab.cnpj]] if cab.cnpj in por_cnpj else []
+        else:   # EFD-Contribuições é centralizada: o arquivo da matriz cobre todos os estabelecimentos da raiz
+            alvos = [e for c, e in por_cnpj.items() if c[:8] == cab.cnpj[:8]]
+        if not alvos:
+            relatorio.append(f"{cab.caminho.name}: CNPJ {cab.cnpj} não cadastrado — ignorado")
+            continue
+        ids = {e.cnpj: e.id for e in alvos}
+        s.execute(delete(models.EscrituracaoItem).where(
+            models.EscrituracaoItem.empresa_id.in_(ids.values()), models.EscrituracaoItem.tipo == cab.tipo,
+            models.EscrituracaoItem.competencia == cab.competencia))
+        contagem, linhas = dict.fromkeys(ids.values(), 0), []
+
+        def descarregar():
+            if linhas:
+                s.execute(insert(models.EscrituracaoItem), linhas)
+                linhas.clear()
+
+        for nota in sped.notas(cab):
+            eid = ids.get(nota.cnpj)
+            if eid is None:
+                continue
+            base = {"empresa_id": eid, "tipo": cab.tipo, "competencia": cab.competencia, "chave": nota.chave}
+            icms = nota.total_icms if nota.total_icms or not nota.itens else sum(i[1] for i in nota.itens.values())
+            linhas.append({**base, "n_item": 0, "valor": sum((i[0] for i in nota.itens.values()), Decimal(0)),
+                           "icms": icms, "pis_cofins": nota.total_pis_cofins})
+            linhas.extend({**base, "n_item": n, "valor": v, "icms": i, "pis_cofins": pc}
+                          for n, (v, i, pc) in nota.itens.items())
+            contagem[eid] += 1
+            if len(linhas) >= 5000:
+                descarregar()
+        descarregar()
+        for e in alvos:
+            arq = s.scalar(select(models.EscrituracaoArquivo).where(
+                models.EscrituracaoArquivo.empresa_id == e.id, models.EscrituracaoArquivo.tipo == cab.tipo,
+                models.EscrituracaoArquivo.competencia == cab.competencia))
+            if arq is None:
+                arq = models.EscrituracaoArquivo(empresa_id=e.id, tipo=cab.tipo, competencia=cab.competencia)
+                s.add(arq)
+            arq.finalidade, arq.arquivo, arq.notas = cab.finalidade, str(cab.caminho)[-400:], contagem[e.id]
+        s.flush()
+        linha = (f"{'EFD ICMS/IPI' if cab.tipo == 'fiscal' else 'EFD-Contribuições'} {cab.competencia[5:]}/"
+                 f"{cab.competencia[:4]} {'retificadora' if cab.finalidade != '0' else 'original'}: "
+                 + ", ".join(f"{e.nome.strip()} {contagem[e.id]} nota(s)" for e in alvos))
+        relatorio.append(linha)
+        progresso(linha)
+    return relatorio
+
+
+def creditos_escriturados(s: Session, e: models.Empresa, docs: list[Documento]):
+    """Para as NF-e de entrada de `e` em meses com SPED importado: crédito de hoje por item (ICMS e PIS+COFINS
+    escriturados) e as notas que não foram escrituradas, que ficam fora da análise. Item que não casa com o C170
+    (o ERP desmembrou ou reordenou a nota) recebe o crédito da nota rateado pelo valor.
+    Devolve (creditos {(chave, n_item): (icms | None, pis_cofins | None)}, {chave fora: valor}, notas com SPED)."""
+    E, A = models.EscrituracaoItem, models.EscrituracaoArquivo
+    cobertos = {(t, c) for t, c in s.execute(select(A.tipo, A.competencia).where(A.empresa_id == e.id))}
+    if not cobertos:
+        return {}, {}, 0
+    entradas = [d for d in docs if d.modelo == "55" and d.direcao_para(e.cnpj) == "entrada"
+                and d.contraparte_para(e.cnpj).cnpj[:8] != e.cnpj[:8]]
+    competencias = {d.emissao.strftime("%Y-%m") for d in entradas}
+    registros: dict[tuple, dict[int, tuple]] = {}
+    for tipo, chave, n, valor, icms, pc in s.execute(
+            select(E.tipo, E.chave, E.n_item, E.valor, E.icms, E.pis_cofins)
+            .where(E.empresa_id == e.id, E.competencia.in_(competencias))):
+        registros.setdefault((tipo, chave), {})[n] = (valor, icms, pc)
+    creditos, fora, com_sped = {}, {}, 0
+    for d in entradas:
+        mes = d.emissao.strftime("%Y-%m")
+        tem_fiscal, tem_contrib = ("fiscal", mes) in cobertos, ("contribuicoes", mes) in cobertos
+        if not (tem_fiscal or tem_contrib):
+            continue
+        fiscal = registros.get(("fiscal", d.chave))
+        if tem_fiscal and fiscal is None:
+            # A nota de compra não está no livro: recusada, devolvida ou só recebida por XML.
+            fora[d.chave] = sum((i.valor_operacao for i in d.itens), Decimal(0))
+            continue
+        com_sped += 1
+        contrib = registros.get(("contribuicoes", d.chave)) if tem_contrib else None
+        icms = _rateio(d, fiscal, 1) if fiscal else {}
+        pc = _rateio(d, contrib, 2) if contrib else ({i.n_item: Decimal(0) for i in d.itens} if tem_contrib else {})
+        for i in d.itens:
+            creditos[(d.chave, i.n_item)] = (icms.get(i.n_item), pc.get(i.n_item))
+    return creditos, fora, com_sped
+
+
+def avisos_sped(fora: dict[str, Decimal], com_sped: int) -> list[str]:
+    avisos = []
+    if fora:
+        avisos.append(f"{len(fora)} nota(s) de entrada não escriturada(s) no SPED ({cobertura.reais(sum(fora.values()))}) "
+                      f"ficaram fora da análise: o livro fiscal da empresa não as registra (recusa, devolução, nota "
+                      f"só recebida por XML).")
+    if com_sped:
+        avisos.append(f"Créditos de hoje de {com_sped} nota(s) de entrada vêm do SPED, o que a empresa de fato "
+                      f"escriturou. Meses sem SPED importado usam a regra a partir do XML do fornecedor.")
+    return avisos
+
+
+def _rateio(d: Documento, registros: dict[int, tuple], posicao: int) -> dict[int, Decimal]:
+    """Crédito por item do XML: o do C170 de mesmo número quando o valor confere; senão o total da nota rateado."""
+    itens_ok = all(abs(registros.get(i.n_item, (Decimal(-1),))[0] - i.v_prod) <= Decimal("0.05") for i in d.itens)
+    if itens_ok and set(registros) - {0}:
+        return {i.n_item: registros[i.n_item][posicao] for i in d.itens}
+    total = registros.get(0, (0, Decimal(0), Decimal(0)))[posicao]
+    base = sum((i.v_prod for i in d.itens), Decimal(0))
+    return {i.n_item: (total * i.v_prod / base).quantize(Decimal("0.01")) if base else Decimal(0) for i in d.itens}
+
+
 def gravar_consolidado_nfce(s: Session, e: models.Empresa, competencia: str, mes: MesNFCe, origem: str,
                             cancelados: int = 0, ilegiveis: int = 0) -> models.ConsolidadoNFCe:
     """Grava (ou substitui) o consolidado das NFC-e da empresa no mês AAAA-MM."""
@@ -278,14 +395,17 @@ def montar_analise(s: Session, e: models.Empresa, calculadora: CalculadoraRTC, i
     empresa = empresa_do_motor(e)
     if regime:
         empresa.regime = regime
-    avisos = []
+    avisos, creditos = [], None
     if docs is None:
         cob = cobertura.levantar(s, [e])
         if inicio is None and fim is None:
             inicio, fim = cobertura.periodo_padrao(cob)
-        avisos = cobertura.alertas(cob, inicio, fim)
-    a = analisar(empresa, docs if docs is not None else documentos(s, e, inicio, fim),
-                 premissas_da_empresa(e, anos), calculadora, classificacoes(s, e))
+        docs = documentos(s, e, inicio, fim)
+        creditos, fora, com_sped = creditos_escriturados(s, e, docs)
+        docs = [d for d in docs if d.chave not in fora]
+        avisos = cobertura.alertas(cob, inicio, fim) + avisos_sped(fora, com_sped)
+    a = analisar(empresa, docs, premissas_da_empresa(e, anos), calculadora, classificacoes(s, e),
+                 creditos_escriturados=creditos)
     a.periodo = (inicio, fim)
     a.alertas[:0] = avisos
     return a
@@ -304,10 +424,15 @@ def montar_analise_grupo(s: Session, empresas: list[models.Empresa], calculadora
         inicio, fim = cobertura.periodo_padrao(cob)
     docs: list[Documento] = []
     vistas: set[str] = set()
-    internas = 0
+    internas, creditos, fora, com_sped = 0, {}, {}, 0
     for e in empresas:
-        for d in documentos(s, e, inicio, fim):
-            if d.chave in vistas:          # transferência já vista pelo outro estabelecimento
+        docs_e = documentos(s, e, inicio, fim)
+        cred_e, fora_e, sped_e = creditos_escriturados(s, e, docs_e)
+        creditos.update(cred_e)
+        fora.update(fora_e)
+        com_sped += sped_e
+        for d in docs_e:
+            if d.chave in vistas or d.chave in fora_e:     # transferência já vista; nota fora do livro fiscal
                 continue
             vistas.add(d.chave)
             if so_digitos(d.contraparte_para(e.cnpj).cnpj)[:8] == raiz:
@@ -319,11 +444,11 @@ def montar_analise_grupo(s: Session, empresas: list[models.Empresa], calculadora
     for e in reversed(empresas):           # matriz (primeira da lista) prevalece
         ajustes.update(classificacoes(s, e))
     a = analisar(empresa_do_motor(matriz), docs, premissas_da_empresa(matriz), calculadora, ajustes,
-                 estabelecimentos={e.cnpj for e in empresas})
+                 estabelecimentos={e.cnpj for e in empresas}, creditos_escriturados=creditos)
     if internas:
         a.alertas.insert(0, f"{internas} nota(s) entre estabelecimentos do próprio grupo ficaram fora da visão "
                             f"consolidada: transferência interna não é compra nem venda da empresa como um todo.")
-    a.alertas[:0] = cobertura.alertas(cob, inicio, fim)
+    a.alertas[:0] = cobertura.alertas(cob, inicio, fim) + avisos_sped(fora, com_sped)
     a.periodo = (inicio, fim)
     return a
 

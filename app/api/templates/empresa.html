@@ -20,15 +20,17 @@
 <div class="card">
   <h2>Cobertura por mês</h2>
   <p class="suave">O que está importado em cada mês. A análise só vale se vendas e compras estiverem completas: confira
-    com o faturamento e as compras do período.</p>
+    com o faturamento e as compras do período. Mês com SPED importado usa as notas de entrada e os créditos que a
+    empresa escriturou (<code>python -m app.cli importar-sped</code>); sem SPED, a regra a partir do XML.</p>
   {% for t in alertas_cobertura %}<div class="alerta">{{ t }}</div>{% endfor %}
   <div class="tabela"><table>
     <tr><th class="txt">Mês</th><th>Cupons (NFC-e)</th><th>NF-e de venda</th><th>Vendas</th><th>NF-e de compra</th>
-        <th>Compras de terceiros</th><th>Recebido do grupo</th><th>Enviado ao grupo</th></tr>
+        <th>Compras de terceiros</th><th>Recebido do grupo</th><th>Enviado ao grupo</th><th class="txt">SPED importado</th></tr>
     {% for mes, m in cobertura.meses.items() %}
     <tr><td class="txt">{{ mes[5:] }}/{{ mes[:4] }}</td><td>{{ m.cupons }}</td><td>{{ m.nfe_saidas }}</td>
         <td>{{ m.vendas|brl }}</td><td>{{ m.nfe_entradas }}</td><td>{{ m.compras|brl }}</td>
-        <td>{{ m.entradas_grupo|brl if m.entradas_grupo else '—' }}</td><td>{{ m.saidas_grupo|brl if m.saidas_grupo else '—' }}</td></tr>
+        <td>{{ m.entradas_grupo|brl if m.entradas_grupo else '—' }}</td><td>{{ m.saidas_grupo|brl if m.saidas_grupo else '—' }}</td>
+        <td class="txt">{% for t in m.sped %}{{ {'fiscal': 'ICMS/IPI', 'contribuicoes': 'Contribuições'}[t] }}{{ ' · ' if not loop.last }}{% else %}—{% endfor %}</td></tr>
     {% endfor %}
   </table></div>
 </div>

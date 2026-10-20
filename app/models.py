@@ -101,6 +101,39 @@ class ConsolidadoNFCe(Base):
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
+class EscrituracaoArquivo(Base):
+    """Um SPED importado (ingest/sped.py): EFD ICMS/IPI ('fiscal') ou EFD-Contribuições ('contribuicoes') de um
+    estabelecimento num mês. Mês com o arquivo importado tem as notas de entrada e os créditos que a empresa de fato
+    escriturou; sem ele, a análise usa a regra a partir do XML do fornecedor."""
+    __tablename__ = "escrituracao_arquivo"
+    __table_args__ = (UniqueConstraint("empresa_id", "tipo", "competencia"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    empresa_id: Mapped[int] = mapped_column(ForeignKey("empresa.id"), index=True)
+    tipo: Mapped[str] = mapped_column(String(15))              # fiscal | contribuicoes
+    competencia: Mapped[str] = mapped_column(String(7))        # AAAA-MM
+    finalidade: Mapped[str] = mapped_column(String(2))         # 0 original, 1 substituto (retificadora)
+    arquivo: Mapped[str] = mapped_column(String(400))
+    notas: Mapped[int] = mapped_column(Integer, default=0)
+    importado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class EscrituracaoItem(Base):
+    """Crédito escriturado de um item de NF-e de entrada (C170). n_item 0 = a nota inteira (soma dos itens, ou o
+    C190 quando a nota não traz itens): marca a nota como escriturada e serve de rateio quando os itens não casam."""
+    __tablename__ = "escrituracao_item"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    empresa_id: Mapped[int] = mapped_column(ForeignKey("empresa.id"), index=True)
+    tipo: Mapped[str] = mapped_column(String(15))
+    competencia: Mapped[str] = mapped_column(String(7), index=True)
+    chave: Mapped[str] = mapped_column(String(44), index=True)
+    n_item: Mapped[int] = mapped_column(Integer)
+    valor: Mapped[Decimal] = mapped_column(Numeric(15, 2), default=0)       # VL_ITEM (casa o item com o XML)
+    icms: Mapped[Decimal] = mapped_column(Numeric(15, 2), default=0)        # fiscal: ICMS creditado
+    pis_cofins: Mapped[Decimal] = mapped_column(Numeric(15, 2), default=0)  # contribuições: PIS + COFINS creditados
+
+
 class ClassificacaoProduto(Base):
     """Classificação manual de CBS/IBS por código de produto ou NCM (código tem prioridade)."""
     __tablename__ = "classificacao"

@@ -239,15 +239,20 @@ def _icms_creditavel(i: Item, fornecedor: Participante) -> Decimal:
     return i.v_cred_icms_sn if fornecedor.regime in ("simples", "mei") else i.v_icms + i.v_fcp
 
 
-def _creditos_atuais(i: Item, empresa: Empresa, fornecedor: Participante, p: Premissas) -> Decimal:
+def _creditos_atuais(i: Item, empresa: Empresa, fornecedor: Participante, p: Premissas,
+                     icms: Decimal | None = None, pis_cofins: Decimal | None = None) -> Decimal:
+    """`icms` e `pis_cofins`, quando informados, são os créditos que a empresa escriturou no SPED; sem eles vale a
+    regra montada a partir do XML do fornecedor."""
     if empresa.regime == "simples":
         return ZERO
-    icms = _icms_creditavel(i, fornecedor)
+    icms = _icms_creditavel(i, fornecedor) if icms is None else icms
     ipi = i.v_ipi if p.industria else ZERO
     if empresa.regime == "presumido":
         return icms + ipi
     # Lucro real: PIS/COFINS não cumulativo sobre o custo de aquisição, sem o ICMS (Lei 14.592/2023).
     # Sem crédito em compra de pessoa física (art. 3º, § 3º) ou não sujeita à contribuição (CST 04 a 09).
+    if pis_cofins is not None:
+        return icms + ipi + pis_cofins
     if i.pis_cst in CST_PIS_SEM_CREDITO or len(fornecedor.cnpj) != 14:
         return icms + ipi
     base_pc = i.valor_operacao + (ZERO if p.industria else i.v_ipi) - i.v_icms
@@ -334,9 +339,12 @@ def _valor_is(item: Item, aliq: AliquotaEfetiva, direcao: str, p: Premissas,
 def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas,
              calculadora: CalculadoraRTC,
              overrides: "dict[str, tuple[str, str]] | Classificacoes | None" = None,
-             estabelecimentos: "set[str] | None" = None) -> Analise:
+             estabelecimentos: "set[str] | None" = None,
+             creditos_escriturados: "dict[tuple[str, int], tuple] | None" = None) -> Analise:
     """`estabelecimentos`: CNPJs da mesma pessoa jurídica analisados como uma empresa só (visão do grupo). A nota
-    vale para o estabelecimento que a emitiu ou recebeu; UF, município e regime continuam os de `empresa`."""
+    vale para o estabelecimento que a emitiu ou recebeu; UF, município e regime continuam os de `empresa`.
+    `creditos_escriturados`: {(chave, n_item): (icms | None, pis_cofins | None)} tomados do SPED
+    (servicos.creditos_escriturados) — substituem a regra do XML no crédito de hoje e no ICMS residual da transição."""
     overrides = Classificacoes.de(overrides)
     if hasattr(calculadora, "versao"):
         calculadora.versao()  # confere antes de processar: sem calculadora não há análise (CalculadoraIndisponivel)
@@ -407,6 +415,8 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
     for direcao, doc, item, contraparte, classif in pendentes:
         r = ResultadoItem(direcao, doc, item, contraparte, classif, atual=ValoresCenario(ZERO))
         fornecedor_regular = contraparte.regime == "normal"
+        escriturado = (creditos_escriturados or {}).get((doc.chave, item.n_item)) if direcao == "entrada" else None
+        icms_hoje = escriturado[0] if escriturado and escriturado[0] is not None else _icms_creditavel(item, contraparte)
 
         if direcao == "saida" and empresa.regime == "simples":
             das = (item.valor_operacao * premissas.aliquota_das_pct / 100).quantize(Decimal("0.01"))
@@ -415,7 +425,8 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
             r.atual = ValoresCenario(item.tributos_por_dentro + item.tributos_por_fora)
         else:
             r.atual = ValoresCenario(item.tributos_por_dentro + item.tributos_por_fora,
-                                     _creditos_atuais(item, empresa, contraparte, premissas))
+                                     _creditos_atuais(item, empresa, contraparte, premissas, icms_hoje,
+                                                      escriturado[1] if escriturado else None))
 
         for ano in premissas.anos:
             aliq = aliquotas[Chave(item.ncm, classif.cst, classif.cclasstrib, ano, *tratamento_is[id(item)])]
@@ -436,7 +447,7 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
                     pct = {"simples": premissas.credito_fornecedor_simples_pct,
                            "mei": premissas.credito_fornecedor_mei_pct,
                            "nao_contribuinte": premissas.credito_presumido_nao_contribuinte_pct}[contraparte.regime]
-                    icms_residual = (_icms_creditavel(item, contraparte) * t.fator_icms_iss
+                    icms_residual = (icms_hoje * t.fator_icms_iss
                                      * escala_preco(item, ano)).quantize(Decimal("0.01"))
                     cred = (item.valor_liquido * pct / 100).quantize(Decimal("0.01")) + icms_residual
                 r.anos[ano] = ValoresCenario(tributos, cred, imposto_seletivo=valor_is)
@@ -446,7 +457,7 @@ def analisar(empresa: Empresa, documentos: list[Documento], premissas: Premissas
             cred = ZERO
             if direcao == "entrada" and empresa.regime != "simples":
                 # Crédito amplo de CBS/IBS + ICMS residual da transição.
-                cred = cbs + ibs + (_icms_creditavel(item, contraparte) * t.fator_icms_iss
+                cred = cbs + ibs + (icms_hoje * t.fator_icms_iss
                                     * escala_preco(item, ano)).quantize(Decimal("0.01"))
             r.anos[ano] = ValoresCenario(tributos, cred, cbs, ibs, valor_is)
         resultados.append(r)

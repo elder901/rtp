@@ -14,6 +14,8 @@
   python -m app.cli relatorio --cnpj 11222333000181 --inicio 2026-01-01 --fim 2026-06-30 --saida relatorios/loja.xlsx
   python -m app.cli exportar-xml --raiz 11222333 --destino E:/RTP/tenants [--inicio 2026-01-01] [--fim 2026-09-30]
       (pasta por tenant: um diretório por estabelecimento da raiz, com os XMLs por modelo, mês e entrada/saída)
+  python -m app.cli importar-sped "F:/FISCAL/SPED FISCAL" "F:/FISCAL/SPED CONTRIBUICOES" [--desde 2026-01]
+      (EFD ICMS/IPI e EFD-Contribuições: notas de entrada escrituradas e créditos tomados; escolhe pelo registro 0000)
   python -m app.cli apuracao credencial --cnpj ... --client-id ... [--ambiente prr|pro]   (secret pedido no terminal)
   python -m app.cli apuracao solicitar --cnpj ... --tipo debitos|creditos
   python -m app.cli apuracao verificar [--cnpj ...]
@@ -301,6 +303,12 @@ def cmd_relatorio(a):
     _imprimir_resumo(analise, a.saida)
 
 
+def cmd_importar_sped(a):
+    with db.sessao() as s:
+        relatorio = servicos.importar_sped(s, a.caminhos, a.desde)
+    print(f"{len(relatorio)} arquivo(s) processado(s).")
+
+
 def cmd_exportar_xml(a):
     from app.exportacao import exportar_tenant
 
@@ -501,6 +509,11 @@ def main(argv: list[str] | None = None):
     pr.add_argument("--saida", type=Path, default=Path("relatorios/analise.xlsx"))
     pr.add_argument("--calculadora-url")
     pr.set_defaults(func=cmd_relatorio)
+
+    ps = sub.add_parser("importar-sped", help="importar EFD ICMS/IPI e EFD-Contribuições (pastas ou arquivos)")
+    ps.add_argument("caminhos", nargs="+", type=Path)
+    ps.add_argument("--desde", help="competência inicial AAAA-MM (as pastas costumam guardar anos de arquivos)")
+    ps.set_defaults(func=cmd_importar_sped)
 
     px = sub.add_parser("exportar-xml", help="gravar os XMLs do banco numa pasta por tenant (raiz do CNPJ)")
     px.add_argument("--raiz", help="8 primeiros dígitos do CNPJ (todos os estabelecimentos)")

@@ -32,6 +32,7 @@ class Mes:
     nfe_entradas: int = 0
     saidas_grupo: Decimal = ZERO         # transferências e vendas para estabelecimentos da mesma raiz
     entradas_grupo: Decimal = ZERO
+    sped: tuple = ()                     # SPED importado no mês: ("fiscal", "contribuicoes")
 
 
 @dataclass
@@ -66,7 +67,7 @@ def _faixa(meses: list[str]) -> str:
     return ", ".join(fmt(b[0]) if len(b) == 1 else f"{fmt(b[0])} a {fmt(b[-1])}" for b in blocos)
 
 
-def _reais(v: Decimal) -> str:
+def reais(v: Decimal) -> str:
     return f"R$ {v / 1_000_000:.1f} mi".replace(".", ",") if v >= 100_000 else f"R$ {v:,.0f}".replace(",", ".")
 
 
@@ -99,6 +100,10 @@ def levantar(s: Session, empresas: list[models.Empresa]) -> list[Cobertura]:
             else:
                 m.nfe_entradas += 1
                 m.compras += valor
+        for tipo, competencia in s.execute(select(models.EscrituracaoArquivo.tipo, models.EscrituracaoArquivo.competencia)
+                                           .where(models.EscrituracaoArquivo.empresa_id == e.id)):
+            if competencia in meses:
+                meses[competencia].sped = tuple(sorted({*meses[competencia].sped, tipo}, reverse=True))
         for competencia, cupons, valor in s.execute(select(C.competencia, C.cupons, C.valor).where(C.empresa_id == e.id)):
             meses[competencia].documentos += cupons
             meses[competencia].cupons += cupons
@@ -117,8 +122,12 @@ def periodo_padrao(coberturas: list[Cobertura], meses: int = 12) -> tuple[date |
             date(int(seguinte[:4]), int(seguinte[5:]), 1) - timedelta(days=1))
 
 
+SPED = (("fiscal", "EFD ICMS/IPI", "o ICMS"), ("contribuicoes", "EFD-Contribuições", "o PIS/COFINS"))
+
+
 def alertas(coberturas: list[Cobertura], inicio: date | None = None, fim: date | None = None) -> list[str]:
     saida = []
+    sem_sped: dict[tuple[str, str], list[str]] = {}    # (tipo, meses) -> estabelecimentos
     for c in coberturas:
         # Notas isoladas: blocos de meses separados do bloco principal (o de mais notas) por 4+ meses sem nada.
         # Olha o histórico todo, inclusive fora do período analisado.
@@ -144,8 +153,8 @@ def alertas(coberturas: list[Cobertura], inicio: date | None = None, fim: date |
             compras = sum((periodo[m].compras for m in sem_venda), ZERO)
             vendas = sum((periodo[m].vendas for m in sem_venda), ZERO)
             saida.append(f"{c.nome}: em {len(sem_venda)} mês(es) ({_faixa(sem_venda)}) as vendas importadas "
-                         f"({_reais(vendas) if vendas else 'nenhuma'}) ficam muito abaixo das compras de terceiros "
-                         f"({_reais(compras)}). Faltam os cupons (NFC-e) ou as notas de saída deste estabelecimento? "
+                         f"({reais(vendas) if vendas else 'nenhuma'}) ficam muito abaixo das compras de terceiros "
+                         f"({reais(compras)}). Faltam os cupons (NFC-e) ou as notas de saída deste estabelecimento? "
                          f"Sem eles a análise subestima as vendas.")
         so_grupo = [m for m, v in periodo.items() if not v.vendas and v.saidas_grupo >= max(v.compras / 2, Decimal("0.01"))]
         if so_grupo and len(so_grupo) == len(periodo):
@@ -160,4 +169,13 @@ def alertas(coberturas: list[Cobertura], inicio: date | None = None, fim: date |
         if vazios:
             saida.append(f"{c.nome}: nenhuma nota em {', '.join(_faixa([m]) for m in vazios)}, no meio do período "
                          f"importado. Falta importar esse(s) mês(es)?")
+        if any(v.sped for v in c.meses.values()):     # quem nunca importou SPED já é avisado na própria análise
+            for tipo, _, _ in SPED:
+                faltando = [m for m, v in periodo.items() if v.compras > 0 and tipo not in v.sped]
+                if faltando:
+                    sem_sped.setdefault((tipo, _faixa(faltando)), []).append(c.nome)
+    for (tipo, faixa), nomes in sem_sped.items():
+        _, arquivo, tributo = next(t for t in SPED if t[0] == tipo)
+        saida.append(f"Sem {arquivo} importada em {faixa} ({', '.join(nomes)}): {tributo} de hoje sobre as compras "
+                     f"desses meses vem da regra a partir do XML do fornecedor, que tende a superestimar o crédito.")
     return saida
