@@ -5,6 +5,8 @@
   python -m app.cli empresa excluir --cnpj 11222333000181 --confirmar 11222333000181   (apaga o estabelecimento e os dados)
   python -m app.cli backup --destino E:/RTP/backup [--manter 7]      (cópia do banco, consistente com o servidor ligado)
   python -m app.cli revisao-classificacao --raiz 25735465 --saida relatorios/revisao.xlsx
+  python -m app.cli importar-vendas-erp --cnpj 25735465000383 [--cupons cupons.json] vendas1.json [vendas2.json ...]
+      (NFC-e da loja cujo PDV não grava XML, pela venda por produto do ERP; --consulta 003 2026-01-01 2026-05-31 mostra o SQL)
       (produtos por venda com a classificação usada; marca as presumidas para o fiscal confirmar)
   python -m app.cli usuarios criar --email admin@empresa.com.br --nome "Fulana" --papel admin   (senha pedida no terminal)
   python -m app.cli usuarios criar --email comprador@cliente.com.br --nome "Ciclano" --papel consulta --empresas 25735465
@@ -103,6 +105,24 @@ def cmd_empresa(a):
             for e in s.scalars(select(models.Empresa).order_by(models.Empresa.nome)):
                 cert = f"certificado até {e.certificado.validade:%d/%m/%Y}" if e.certificado else "sem certificado"
                 print(f"{e.cnpj}  {e.nome:<40} {e.regime:<10} {e.uf}  {cert}")
+
+
+def cmd_importar_vendas_erp(a):
+    import json
+
+    from app.ingest import erp_vendas
+
+    if a.consulta:
+        unidade, inicio, fim = a.consulta
+        print(erp_vendas.CONSULTA.format(unidade=unidade, inicio=inicio, fim=fim))
+        return
+    cupons = {}
+    if a.cupons:
+        with open(a.cupons, encoding="utf-8") as f:
+            cupons = {l["mes"]: (int(l["autorizados"]), int(l["cancelados"]), l["total"]) if l.get("total")
+                      else (int(l["autorizados"]), int(l["cancelados"])) for l in json.load(f)["rows"]}
+    with db.sessao() as s:
+        servicos.importar_vendas_erp(s, _empresa(s, a.cnpj), a.arquivos, cupons)
 
 
 def cmd_revisao_classificacao(a):
@@ -606,6 +626,13 @@ def main(argv: list[str] | None = None):
     pp.add_argument("--pa-fim", help="AAAA-MM")
     pp.add_argument("--saida", type=Path)
     pp.set_defaults(func=cmd_apuracao)
+
+    pr2 = sub.add_parser("importar-vendas-erp", help="NFC-e pela venda do PDV no ERP (loja sem XML dos cupons)")
+    pr2.add_argument("--cnpj")
+    pr2.add_argument("--cupons", type=Path, help="resultado JSON com mes, autorizados, cancelados (wrpdv.movnfce)")
+    pr2.add_argument("--consulta", nargs=3, metavar=("UNIDADE", "INICIO", "FIM"), help="só mostra o SQL a rodar")
+    pr2.add_argument("arquivos", nargs="*", type=Path)
+    pr2.set_defaults(func=cmd_importar_vendas_erp)
 
     pv = sub.add_parser("revisao-classificacao", help="planilha de produtos por venda para a revisão fiscal")
     pv.add_argument("--raiz", required=True, help="8 primeiros dígitos do CNPJ")

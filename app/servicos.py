@@ -17,7 +17,7 @@ from app.engine.premissas import Premissas
 from app.ingest import sped
 from app.ingest.arquivos import iterar_xmls
 from app.ingest.consolidacao import MODELO_NFCE, ConsolidadorNFCe, MesNFCe, de_json, documento_do_mes, para_json
-from app.parser.nfe import Documento, ler_nfe
+from app.parser.nfe import Documento, Participante, ler_nfe
 from app.seguranca import cifrar, decifrar
 
 CAMPOS_PREMISSAS = ["cbs_referencia", "ibs_uf_referencia", "ibs_mun_referencia", "credito_fornecedor_simples_pct",
@@ -292,6 +292,39 @@ def _rateio(d: Documento, registros: dict[int, tuple], posicao: int) -> dict[int
     total = registros.get(0, (0, Decimal(0), Decimal(0)))[posicao]
     base = sum((i.v_prod for i in d.itens), Decimal(0))
     return {i.n_item: (total * i.v_prod / base).quantize(Decimal("0.01")) if base else Decimal(0) for i in d.itens}
+
+
+def importar_vendas_erp(s: Session, e: models.Empresa, arquivos, cupons: dict[str, tuple] | None = None,
+                        progresso=print) -> list[str]:
+    """Grava as NFC-e do mês pela venda do PDV registrada no ERP (ingest/erp_vendas.py), para a loja que não guarda o
+    XML dos cupons. Mês já consolidado é substituído. `cupons`: AAAA-MM -> (autorizados, cancelados[, valor total das
+    NFC-e autorizadas]); com o total, o mês que não bate (diferença > 0,1%) não é gravado."""
+    from app.ingest import erp_vendas
+
+    outras = [o for o in estabelecimentos_da_raiz(s, raiz_cnpj(e.cnpj)) if o.id != e.id]
+    consolidados = [de_json(c.itens_gz) for c in s.scalars(select(models.ConsolidadoNFCe).where(
+        models.ConsolidadoNFCe.empresa_id.in_([o.id for o in outras])))]
+    referencia = erp_vendas.referencias(consolidados)
+    razao = consolidados[0].emitente.nome if consolidados else e.nome
+    emitente = Participante(e.cnpj, razao, e.uf, str(e.cod_municipio), crt="1" if e.regime == "simples" else "3")
+    relatorio: list[str] = []
+    por_mes = erp_vendas.ler_resultados(arquivos, relatorio)
+    for aviso in relatorio:
+        progresso(aviso)
+    for competencia, linhas in sorted(por_mes.items()):
+        autorizados, cancelados, *total = (cupons or {}).get(competencia, (0, 0))
+        mes, sem_referencia = erp_vendas.consolidar(linhas, emitente, referencia, autorizados)
+        if total and abs(mes.valor - Decimal(str(total[0]))) > Decimal(str(total[0])) * Decimal("0.001"):
+            relatorio.append(f"{competencia}: NÃO gravado — venda do ERP R$ {mes.valor:,.2f} difere das NFC-e "
+                             f"autorizadas R$ {Decimal(str(total[0])):,.2f}.")
+            progresso(relatorio[-1])
+            continue
+        gravar_consolidado_nfce(s, e, competencia, mes, "erp:movprodd EVP (PDV sem XML)", cancelados)
+        linha = (f"{competencia}: {len(mes.itens)} produto(s), R$ {mes.valor:,.2f}, {autorizados} cupom(ns); "
+                 f"R$ {sem_referencia:,.2f} sem referência nas outras lojas")
+        relatorio.append(linha)
+        progresso(linha)
+    return relatorio
 
 
 def gravar_consolidado_nfce(s: Session, e: models.Empresa, competencia: str, mes: MesNFCe, origem: str,
