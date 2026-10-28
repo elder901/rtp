@@ -92,6 +92,28 @@
   .so-celular { display:none; }
   .dica { position:absolute; pointer-events:none; background:var(--card); border:1px solid var(--borda); border-radius:6px;
           padding:6px 10px; font-size:12px; box-shadow:0 2px 8px rgba(0,0,0,.12); display:none; white-space:nowrap; }
+  .opcoes { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr)); gap:6px; margin:6px 0; }
+  .migalha { margin:0 0 2px; font-size:13px; }
+
+  /* ---- Menu: empresa, estabelecimentos (o aberto mostra as seções dele) e o usuário logado ---- */
+  .lateral nav a .corta { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lateral nav a.aberto { color:#fff; font-weight:600; }
+  .lateral nav a.sub { padding:6px 10px 6px 38px; font-size:13px; }
+  .lateral nav a.sub svg { width:15px; height:15px; }
+  .lateral .usuario { margin-top:auto; padding:12px 20px 16px; border-top:1px solid rgba(255,255,255,.12); font-size:13px; }
+  .lateral .usuario strong { display:block; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lateral .usuario span { color:var(--menu-suave); font-size:12px; }
+  .lateral .usuario .acoes-usuario { display:flex; gap:14px; margin-top:6px; align-items:center; }
+  .lateral .usuario a, .lateral .usuario button { color:var(--menu-texto); background:none; padding:0; font-weight:500;
+                                                  font-size:13px; text-decoration:underline; }
+
+  /* ---- Telas sem menu (login, primeiro acesso) ---- */
+  .sem-menu .app { display:block; }
+  .sem-menu main { max-width:420px; padding-top:10vh; }
+  .acesso .marca-acesso { font-family:"Oswald", "Segoe UI Semibold", system-ui, sans-serif; text-transform:uppercase;
+                          color:var(--serie); font-size:24px; font-weight:700; margin:0 0 16px; line-height:1.1; }
+  .acesso .marca-acesso small { display:block; font-size:10px; color:var(--suave); letter-spacing:.14em; margin-top:4px; }
+  .acesso form > div { margin-bottom:12px; }
 
   /* ---- Carregando: feedback nas navegações (a 1ª abertura de uma análise recalcula tudo e demora) ---- */
   /* sem backdrop-filter: desfocar páginas com centenas de milhares de elementos trava a renderização */
@@ -174,9 +196,16 @@
                                                           max-width:calc(60% - 12px); }
     table.empilhada td .barras { max-width:55%; }
   }
+  /* Impressão (ex.: pauta de negociação levada à reunião): só o conteúdo. */
+  @media print {
+    .topo, .lateral, .fundo-menu, .carregando, .nao-imprime { display:none !important; }
+    .app { display:block; }
+    body { background:#fff; }
+    .card { box-shadow:none; break-inside:avoid; }
+  }
 </style>
 </head>
-<body>
+<body class="{{ 'sem-menu' if sem_menu }} {{ 'so-leitura' if usuario and not usuario.pode_editar }}">
 {% macro icone(nome) %}{% set icones = {
   'empresas': '<path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h1M9 13h1M9 17h1M14 9h1M14 13h1M14 17h1"/>',
   'geral': '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>',
@@ -185,6 +214,9 @@
   'fornecedores': '<path d="M3 7h11v10H3zM14 10h4l3 3v4h-7"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/>',
   'produtos': '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
   'apuracao': '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><path d="M9 7h6M9 11h6M9 15h3"/>',
+  'empresa': '<path d="M3 21h18M5 21V7l7-4 7 4v14M9 9h1M9 13h1M9 17h1M14 9h1M14 13h1M14 17h1"/>',
+  'estabelecimento': '<path d="M4 10v10h16V10M3 10l2-6h14l2 6zM9 20v-5h6v5"/>',
+  'usuarios': '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/>',
 } %}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
   stroke-linejoin="round" aria-hidden="true">{{ icones[nome]|safe }}</svg>{% endmacro %}
 {% set secoes = [('geral', '', 'Dados e notas'), ('classificacao', '/classificacao', 'Classificação'),
@@ -193,8 +225,13 @@
 {# prefixo dos links analíticos: /empresas/{id} ou /grupos/{raiz} (a fachada do grupo não tem id) #}
 {% set base = base if base is defined else ('/empresas/' ~ e.id if e is defined and e.id is defined else '') %}
 {% set aba_atual = aba if aba is defined else '' %}
-{% set titulo_secao = (secoes|selectattr(0, 'equalto', aba_atual)|map(attribute=2)|first) if aba_atual else 'Empresas' %}
+{% set outras_secoes = {'empresa': 'Visão geral', 'usuarios': 'Usuários', 'conta': 'Minha conta', 'nova': 'Nova empresa'} %}
+{% set titulo_secao = outras_secoes[aba_atual] if aba_atual in outras_secoes
+                      else ((secoes|selectattr(0, 'equalto', aba_atual)|map(attribute=2)|first) if aba_atual else 'Empresas') %}
+{% set sem_menu = sem_menu if sem_menu is defined else false %}
+{% set usuario = usuario if usuario is defined else none %}
 
+{% if not sem_menu %}
 <header class="topo">
   <button type="button" class="abrir" aria-controls="menu-lateral" aria-expanded="false" aria-label="Abrir menu" data-menu="abrir">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
@@ -202,6 +239,7 @@
   <div class="titulo">{{ titulo_secao }}{% if e is defined %}<small>{{ e.nome }}</small>{% endif %}</div>
 </header>
 <div class="fundo-menu" data-menu="fechar"></div>
+{% endif %}
 <div class="carregando" id="carregando" hidden role="status">
   <div class="giro" aria-hidden="true"></div>
   <p>Carregando…<br><small>A primeira abertura de uma análise processa todas as notas e pode levar alguns
@@ -209,6 +247,7 @@
 </div>
 
 <div class="app">
+  {% if not sem_menu %}
   <aside class="lateral" id="menu-lateral" aria-label="Menu">
     <button type="button" class="fechar" aria-label="Fechar menu" data-menu="fechar">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
@@ -216,44 +255,56 @@
     <a class="marca" href="/">RTP<small>Planejamento da Reforma Tributária</small></a>
     <nav aria-label="Navegação principal">
       <a href="/" class="{{ 'ativa' if not aba_atual }}" {{ 'aria-current=page' if not aba_atual }}>{{ icone('empresas') }}Empresas</a>
+      {% if usuario and usuario.pode_editar %}
+      <a href="/usuarios" class="{{ 'ativa' if aba_atual == 'usuarios' }}" {{ 'aria-current=page' if aba_atual == 'usuarios' }}>{{ icone('usuarios') }}Usuários</a>
+      {% endif %}
     </nav>
-    {% if grupo is defined %}
-    <div class="grupo">Empresa (consolidado)<strong title="{{ grupo.nome }}">{{ grupo.nome }}</strong>
-      <span>raiz {{ grupo.raiz }} · {{ grupo.estabelecimentos|length }} estabelecimentos</span></div>
-    <nav aria-label="Seções do consolidado">
-      {% for chave, caminho, rotulo in [('analise', '/analise', 'Análise'), ('fornecedores', '/fornecedores', 'Fornecedores'),
-                                        ('produtos', '/produtos', 'Produtos')] %}
-      <a href="{{ base }}{{ caminho }}" class="{{ 'ativa' if aba_atual == chave }}" {{ 'aria-current=page' if aba_atual == chave }}>{{ icone(chave) }}{{ rotulo }}</a>
+    {% if corp is defined and corp %}
+    {# A empresa (pessoa jurídica) e, dentro dela, os estabelecimentos; o estabelecimento aberto mostra as seções dele #}
+    {% set no_grupo = grupo is defined %}
+    {% set n_estab = corp.estabelecimentos|length %}
+    <div class="grupo">Empresa<strong title="{{ corp.nome }}">{{ corp.nome }}</strong>
+      <span>raiz {{ corp.raiz }} · {{ n_estab }} estabelecimento{{ 's' if n_estab > 1 }}</span></div>
+    <nav aria-label="Empresa">
+      {% for chave, caminho, rotulo in [('empresa', '', 'Visão geral'), ('analise', '/analise', 'Análise'),
+                                        ('fornecedores', '/fornecedores', 'Fornecedores'), ('produtos', '/produtos', 'Produtos')] %}
+      {% set ativo = no_grupo and aba_atual == chave %}
+      <a href="/grupos/{{ corp.raiz }}{{ caminho }}" class="{{ 'ativa' if ativo }}" {{ 'aria-current=page' if ativo }}>{{ icone(chave) }}{{ rotulo }}</a>
       {% endfor %}
     </nav>
     <div class="grupo">Estabelecimentos</div>
     <nav aria-label="Estabelecimentos">
-      {% for est in grupo.estabelecimentos %}
-      <a href="/empresas/{{ est.id }}" title="{{ est.nome }}">{{ icone('empresas') }}<span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ est.nome }}</span></a>
-      {% endfor %}
-    </nav>
-    {% elif e is defined %}
-    <div class="grupo">Empresa<strong title="{{ e.nome }}">{{ e.nome }}</strong>
-      <span>{{ e.cnpj }} · {{ {'real':'Lucro Real','presumido':'Lucro Presumido','simples':'Simples'}[e.regime] }} · {{ e.uf }}</span></div>
-    <nav aria-label="Seções da empresa">
-      {% if grupo_da_empresa is defined %}
-      <a href="/grupos/{{ grupo_da_empresa.raiz }}/analise">{{ icone('empresas') }}Empresa inteira (consolidado)</a>
-      {% endif %}
-      {% for chave, caminho, rotulo in secoes %}
-      <a href="/empresas/{{ e.id }}{{ caminho }}" class="{{ 'ativa' if aba_atual == chave }}" {{ 'aria-current=page' if aba_atual == chave }}>{{ icone(chave) }}{{ rotulo }}</a>
+      {% for est in corp.estabelecimentos %}
+      {% set aberto = estab_atual is defined and estab_atual == est.id %}
+      <a href="/empresas/{{ est.id }}" title="{{ est.nome }}" class="{{ 'aberto' if aberto }}">{{ icone('estabelecimento') }}<span class="corta">{{ est.nome }}</span></a>
+      {% if aberto %}{% for chave, caminho, rotulo in secoes %}
+      <a href="/empresas/{{ est.id }}{{ caminho }}" class="sub {{ 'ativa' if aba_atual == chave }}" {{ 'aria-current=page' if aba_atual == chave }}>{{ icone(chave) }}{{ rotulo }}</a>
+      {% endfor %}{% endif %}
       {% endfor %}
     </nav>
     {% endif %}
+    {% if usuario %}
+    <div class="usuario"><strong title="{{ usuario.email }}">{{ usuario.nome }}</strong>
+      <span>{{ {'admin': 'Administrador', 'gestor': 'Gestor', 'consulta': 'Consulta'}[usuario.papel] }}</span>
+      <div class="acoes-usuario"><a href="/conta">Minha conta</a>
+        <form method="post" action="/sair" style="margin:0"><button type="submit">Sair</button></form></div>
+    </div>
+    {% endif %}
   </aside>
+  {% endif %}
 
   <main>
   {% if e is defined %}
     <div class="titulo-empresa">
+      {% if estab_atual is defined %}<p class="migalha"><a href="/grupos/{{ corp.raiz }}">{{ corp.nome }}</a> ›
+        estabelecimento</p>{% endif %}
       <h1>{{ e.nome }}</h1>
       <p class="suave" style="margin:0">CNPJ {{ e.cnpj }} · {{ {'real':'Lucro Real','presumido':'Lucro Presumido','simples':'Simples Nacional'}[e.regime] }} · {{ e.uf }} · <b>{{ titulo_secao }}</b></p>
     </div>
   {% endif %}
   {% if avisos %}<div class="card">{% for t in avisos %}<div class="alerta">{{ t }}</div>{% endfor %}</div>{% endif %}
+  {% if usuario and not usuario.pode_editar and estab_atual is defined %}<p class="suave nao-imprime">Perfil de consulta:
+    você vê e exporta; importar, classificar e alterar dados ficam com o gestor da empresa.</p>{% endif %}
   {% block conteudo %}{% endblock %}
   </main>
 </div>
@@ -267,7 +318,7 @@
     if (aberto) document.querySelector('#menu-lateral nav a')?.focus();
     else botaoMenu.focus({preventScroll: true});
   }
-  botaoMenu.addEventListener('click', () => menu(true));
+  botaoMenu?.addEventListener('click', () => menu(true));
   document.querySelectorAll('[data-menu="fechar"]').forEach(el => el.addEventListener('click', () => menu(false)));
   document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && document.body.classList.contains('menu-aberto')) menu(false); });
 
@@ -281,6 +332,22 @@
   });
   document.addEventListener('submit', ev => { if (ev.target.method !== 'post') carregando.hidden = false; });
   window.addEventListener('pageshow', () => { carregando.hidden = true; });  // volta do histórico (bfcache)
+
+  // Perfil de consulta: formulários de alteração aparecem desabilitados (o servidor também recusa).
+  if (document.body.classList.contains('so-leitura')) {
+    document.querySelectorAll('main form[method="post"]:not([action="/conta"])').forEach(f =>
+      f.querySelectorAll('input, select, textarea, button').forEach(el => { el.disabled = true; }));
+  }
+
+  // Cadastro: trocar a UF recarrega os municípios (base oficial da calculadora).
+  document.querySelectorAll('select[data-uf]').forEach(uf => uf.addEventListener('change', async () => {
+    const destino = uf.form.querySelector('select[data-municipio]');
+    destino.replaceChildren(new Option('Carregando…', ''));
+    const r = await fetch('/municipios?uf=' + encodeURIComponent(uf.value));
+    const lista = r.ok ? await r.json() : [];
+    destino.replaceChildren(new Option(lista.length ? 'Escolha…' : 'Municípios indisponíveis', ''),
+                            ...lista.map(m => new Option(m.nome, m.codigo)));
+  }));
 
   // Tabelas: guarda o título de cada coluna em data-rotulo para virarem cartões no celular (ver CSS acima).
   document.querySelectorAll('.tabela table').forEach(tabela => {

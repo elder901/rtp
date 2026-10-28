@@ -1,6 +1,5 @@
 from decimal import Decimal as D
 
-from fastapi.testclient import TestClient
 
 from app import db, servicos
 from app.api import main
@@ -9,7 +8,7 @@ from app.engine.premissas import Premissas
 from app.engine.simples import comparar
 from app.ingest.arquivos import ler_caminho
 from app.relatorios import agregacao
-from tests.conftest import CNPJ_EMPRESA, FX, CalculadoraFake
+from tests.conftest import CNPJ_EMPRESA, FX, CalculadoraFake, cliente_logado
 
 
 def _analise(regime: str):
@@ -50,7 +49,7 @@ def test_painel_empresa_simples(banco, monkeypatch):
         e = servicos.criar_empresa(s, CNPJ_EMPRESA, "LOJA", "simples", "SP", 3550308)
         servicos.importar_arquivos(s, e, [(p.name, p.read_bytes()) for p in (FX / "xml").glob("*.xml")])
         id_ = e.id
-    c = TestClient(main.app)
+    c = cliente_logado()
     painel = c.get(f"/empresas/{id_}/analise")
     assert "permanecer no Simples" in painel.text and "Preço neutro" in painel.text
     excel = c.get(f"/empresas/{id_}/analise/excel")

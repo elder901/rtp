@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block conteudo %}
+<div class="card">
+  <p style="margin-top:0"><a href="/usuarios">← Usuários</a></p>
+  <h2 style="margin-bottom:2px">{{ alvo.nome }}</h2>
+  <p class="suave" style="margin-top:0">{{ alvo.email }} · criado em {{ alvo.criado_em.strftime('%d/%m/%Y') if alvo.criado_em else '—' }}
+    · último acesso {{ alvo.ultimo_acesso.strftime('%d/%m/%Y %H:%M') if alvo.ultimo_acesso else 'nunca' }}</p>
+  {% if erro %}<div class="alerta" role="alert">{{ erro }}</div>{% endif %}
+  <form method="post" action="/usuarios/{{ alvo.id }}">
+    {% set proprio = alvo.id == usuario.id %}
+    <div class="grade">
+      <div><label for="nome">Nome</label><input id="nome" name="nome" value="{{ alvo.nome }}" required></div>
+      <div><label for="papel">Perfil</label><select id="papel" name="papel" {{ 'disabled' if proprio }}>
+        {% for v, t in papeis.items() %}{% if usuario.admin or v != 'admin' %}
+        <option value="{{ v }}" {{ 'selected' if alvo.papel == v }}>{{ t }}</option>{% endif %}{% endfor %}</select>
+        {% if proprio %}<input type="hidden" name="papel" value="{{ alvo.papel }}">{% endif %}</div>
+      <div><label for="nova_senha">Nova senha (deixe em branco para manter)</label>
+        <input id="nova_senha" name="nova_senha" type="password" autocomplete="new-password" minlength="8"></div>
+      <div><label class="check" style="margin-top:28px"><input type="checkbox" name="ativo" value="true" {{ 'checked' if alvo.ativo }} {{ 'disabled' if proprio }}> Ativo</label>
+        {% if proprio %}<input type="hidden" name="ativo" value="true">{% endif %}</div>
+    </div>
+    {% if proprio %}<p class="suave">Você não pode mudar o próprio perfil nem se desativar.</p>{% endif %}
+    <h3 style="font-size:13px">Empresas que ele vê</h3>
+    <div class="opcoes">{% for x in empresas %}
+      <label class="check"><input type="checkbox" name="empresas" value="{{ x.raiz }}" {{ 'checked' if x.raiz in raizes }}>
+        {{ x.nome }} <span class="suave">· raiz {{ x.raiz }}</span></label>{% endfor %}</div>
+    <p class="suave">O administrador vê todas, independentemente da marcação. Redefinir a senha ou desativar encerra as
+      sessões abertas do usuário.</p>
+    <div class="acoes"><button type="submit">Salvar</button></div>
+  </form>
+</div>
+{% endblock %}

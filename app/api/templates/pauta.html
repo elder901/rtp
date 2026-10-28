@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% macro var(v, inverso=false) -%}
+  {%- if v is none %}<span class="suave">—</span>
+  {%- elif (v > 0) != inverso and v != 0 %}<span class="sobe">{{ '+' if v > 0 }}{{ v|pct }}</span>
+  {%- elif v != 0 %}<span class="desce">{{ '+' if v > 0 }}{{ v|pct }}</span>
+  {%- else %}0%{% endif -%}
+{%- endmacro %}
+{% macro fica(fator) -%}
+  {%- if fator == 1 %}continua{% elif fator == 0 %}<span class="desce">sai</span>{% else %}{{ (fator * 100)|round|int }}% dele{% endif -%}
+{%- endmacro %}
+{% set nomes_regime = {'normal': 'Regime normal', 'simples': 'Simples Nacional', 'mei': 'MEI', 'nao_contribuinte': 'Não contribuinte'} %}
+{% set t = transicao[ano] %}
+{% set eq = f.variacao_preco_nota_equilibrio_pct %}
+{% set consulta = 'inicio=' ~ inicio ~ '&fim=' ~ fim %}
+{% block conteudo %}
+<div class="card">
+  <p class="nao-imprime" style="margin-top:0">
+    <a href="{{ base }}/fornecedores/{{ f.cnpj }}?ano={{ ano }}&{{ consulta }}">← Detalhe do fornecedor</a> ·
+    <a href="{{ base }}/fornecedores/{{ f.cnpj }}/pauta.xlsx?ano={{ ano }}&{{ consulta }}">Baixar em Excel</a> ·
+    <a href="#" onclick="window.print(); return false">Imprimir</a></p>
+  <h2 style="margin-bottom:2px">Pauta de negociação — {{ f.nome }}</h2>
+  <p class="suave" style="margin-top:0">{% if f.cnpjs > 1 %}raiz {{ f.cnpj }} ({{ f.cnpjs }} CNPJs que faturaram){% else %}{{ f.cnpj }}{% endif %}
+    · {{ nomes_regime.get(f.regime, f.regime) }} · {{ f.uf }} ·
+    compras de {{ a.periodo[0].strftime('%d/%m/%Y') if a.periodo[0] else 'todo o histórico' }}
+    {%- if a.periodo[1] %} a {{ a.periodo[1].strftime('%d/%m/%Y') }}{% endif %} ({{ meses }} mês(es) com compras).
+    Valores "por ano" = período × 12 / {{ meses }}.</p>
+  <p class="nao-imprime" style="margin-bottom:0">Ano da negociação:
+    {% for y in a.premissas.anos %}<a href="?ano={{ y }}&{{ consulta }}" {% if y == ano %}style="font-weight:700"{% endif %}>{{ y }}</a>{{ ' · ' if not loop.last }}{% endfor %}</p>
+</div>
+
+<div class="card">
+  <h2>O que pedir para {{ ano }}</h2>
+  <div class="indicadores">
+    <div class="indicador"><div class="rotulo">Compras por ano (preço de nota)</div><div class="valor">{{ (f.preco_nota_atual * fator_ano)|brl }}</div></div>
+    <div class="indicador"><div class="rotulo">Meta de preço de nota em {{ ano }}</div><div class="valor">{{ var(eq, inverso=true) }}</div></div>
+    <div class="indicador"><div class="rotulo">Em jogo por ano se ele mantiver os preços</div><div class="valor">
+      {% set d = f.variacao_custo * fator_ano %}<span class="{{ 'sobe' if d > 0 else 'desce' if d < 0 }}">{{ '+' if d > 0 }}{{ d|brl }}</span></div></div>
+  </div>
+  <p style="margin-bottom:0">
+  {% if eq is not none and eq < 0 %}
+    Para o nosso custo em {{ ano }} ficar igual ao de hoje, o preço de nota precisa cair <b>{{ (-eq)|pct }}</b>:
+    de {{ (f.preco_nota_atual * fator_ano)|brl }} para {{ (f.preco_nota_equilibrio * fator_ano)|brl }} por ano no mesmo volume.
+    Se ele mantiver os preços, pagamos {{ (f.variacao_custo * fator_ano)|brl }} a mais por ano.
+  {% elif eq is not none and eq > 0 %}
+    Mesmo com os preços de hoje o nosso custo com ele cai em {{ ano }}: há folga de até <b>{{ eq|pct }}</b> no preço de nota
+    antes de o custo superar o de hoje. Não aceitar reajuste por conta da reforma.
+  {% else %}Custo praticamente neutro em {{ ano }}.{% endif %}</p>
+</div>
+
+<div class="card">
+  <h2>Por que o preço deve cair — o argumento</h2>
+  <p class="suave" style="margin-top:-6px">Composição do preço de nota de hoje, pelo que o próprio fornecedor destaca nas notas.</p>
+  <div class="tabela"><table>
+    <tr><th class="txt">Tributo no preço de nota</th><th>Hoje (% do preço)</th><th class="txt">Em {{ ano }}</th></tr>
+    <tr><td class="txt">PIS/COFINS</td><td>{{ f.parte(f.pis_cofins)|pct }}</td><td class="txt">{{ fica(t.fator_pis_cofins) }}</td></tr>
+    <tr><td class="txt">IPI</td><td>{{ f.parte(f.ipi)|pct }}</td><td class="txt">{{ fica(t.fator_ipi) }}</td></tr>
+    <tr><td class="txt">ICMS próprio</td><td>{{ f.parte(f.icms)|pct }}</td><td class="txt">{{ fica(t.fator_icms_iss) }}</td></tr>
+    <tr><td class="txt">ICMS-ST</td><td>{{ f.parte(f.icms_st)|pct }}</td><td class="txt">{{ fica(t.fator_icms_iss) }}</td></tr>
+    <tr class="destaque"><td class="txt"><b>Sai do preço em {{ ano }}</b></td><td><b>{{ f.parte(f.sai_do_preco(ano))|pct }}</b></td><td class="txt">deixa de ser tributo</td></tr>
+    <tr><td class="txt">Entra: CBS/IBS</td><td>{{ f.parte(f.cbs_ibs_ano)|pct }}</td><td class="txt">nós recuperamos como crédito</td></tr>
+    {% if f.imposto_seletivo_ano %}<tr><td class="txt">Entra: Imposto Seletivo</td><td>{{ f.parte(f.imposto_seletivo_ano)|pct }}</td><td class="txt">sem crédito: vira custo</td></tr>{% endif %}
+    <tr><td class="txt">Nosso crédito</td><td>{{ f.parte(f.creditos_atual)|pct }} hoje</td><td class="txt">{{ f.parte(f.creditos_ano)|pct }} em {{ ano }}</td></tr>
+  </table></div>
+  <p style="margin-bottom:0">De cada R$ 100,00 de nota, R$ {{ f.parte(f.sai_do_preco(ano))|brl }} deixam de ser tributo em {{ ano }}.
+    O que entra no lugar (CBS/IBS) nós recuperamos inteiro como crédito{% if f.imposto_seletivo_ano %}, exceto o Imposto Seletivo{% endif %}.
+    Se o preço de nota não cair, a diferença vira margem do fornecedor.</p>
+  {% if (f.imposto_anterior_pct or 0) >= 10 %}<div class="alerta">{{ f.imposto_anterior_pct|pct }} das compras dele têm tributo pago
+    antes dele na cadeia (PIS/COFINS monofásico ou ICMS-ST retido anteriormente), que não aparece na nota. Quando esse
+    tributo sai, o custo dele também cai: a meta acima é o <b>mínimo</b> a pedir.</div>{% endif %}
+  {% if f.regime in ('simples', 'mei') %}<div class="alerta">Fornecedor do {{ 'Simples' if f.regime == 'simples' else 'MEI' }}: transfere pouco
+    crédito de CBS/IBS. A opção dele pelo regime regular de CBS/IBS também resolve.</div>{% endif %}
+</div>
+
+<div class="card">
+  <h2>Metas por ano da transição</h2>
+  <div class="tabela"><table>
+    <tr><th class="txt">Ano</th><th>Tributo que sai do preço de nota</th><th>Meta de preço de nota</th><th>Em jogo por ano se ele mantiver os preços</th></tr>
+    {% for m in metas %}
+    <tr class="{{ 'destaque' if m.ano == ano }}"><td class="txt">{{ m.ano }}</td><td>{{ m.sai_do_preco_pct|pct }}</td>
+      <td>{{ var(m.preco_nota_equilibrio_pct, inverso=true) }}</td>
+      <td><span class="{{ 'sobe' if m.variacao_custo_por_ano > 0 else 'desce' if m.variacao_custo_por_ano < 0 }}">{{ '+' if m.variacao_custo_por_ano > 0 }}{{ m.variacao_custo_por_ano|brl }}</span></td></tr>
+    {% endfor %}
+  </table></div>
+  <p class="suave" style="margin-bottom:0">2027 e 2028: sai PIS/COFINS e IPI, entra a CBS. 2029 a 2032: o ICMS cai 10% ao ano e o IBS
+    sobe no lugar. 2033: só CBS/IBS. A meta de cada ano vale sobre o preço de nota de hoje.</p>
+</div>
+
+<div class="card">
+  <h2>Produtos — preço de nota alvo em {{ ano }}</h2>
+  <p class="suave" style="margin-top:-6px">Maior volume primeiro{% if compras|length > 60 %}; os 60 primeiros de {{ compras|length }} — a lista completa está no Excel{% endif %}.</p>
+  <div class="tabela"><table>
+    <tr><th class="txt">Produto</th><th class="txt">Un.</th><th>Qtd. por ano</th><th>Preço de nota unit. hoje</th>
+        <th>Meta unit. {{ ano }}</th><th>Variação</th><th class="txt">Alternativa em {{ ano }} (preços de hoje)</th></tr>
+    {% for c in compras[:60] %}
+    <tr><td class="txt quebra">{{ c.descricao }}<br><span class="suave">{{ c.gtin or c.codigos|join(', ') }} · {{ c.cclasstrib }}</span></td>
+      <td class="txt">{{ c.unidade }}</td><td>{{ (c.quantidade * fator_ano)|round(0)|int }}</td>
+      <td>{{ c.preco_nota_unit|brl }}</td><td><b>{{ c.preco_nota_equilibrio_unit|brl }}</b></td>
+      <td>{{ var(c.variacao_preco_nota_equilibrio_pct, inverso=true) }}</td>
+      <td class="txt">{% if c.melhor and c.melhor is not sameas c %}{{ c.melhor.fornecedor_nome }}: custo {{ c.melhor.custo_unit_precos_hoje|brl }}
+        (este: {{ c.custo_unit_precos_hoje|brl }}){% elif c.melhor %}este é o mais barato{% else %}<span class="suave">só este fornecedor</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+
+<div class="card">
+  <h2>Confiabilidade destes números</h2>
+  <ul style="margin:0; padding-left:18px">
+    <li>Tributo de hoje: o que o fornecedor destacou nas notas; nosso crédito de hoje,
+      {% if creditos_sped %}o que escrituramos no SPED (onde importado){% else %}pela regra a partir do XML (SPED não importado){% endif %}.</li>
+    <li>Classificação dos produtos na reforma: {{ f.presumido_pct|pct }} do volume é presumida pelo NCM ou está sem classificação
+      (tributação integral){% if (f.presumido_pct or 0) >= 30 %} — <b>confirme os principais produtos na aba Classificação antes de fechar</b>{% endif %}.</li>
+    <li>Alíquotas de {{ ano }}: {{ 'oficiais da calculadora' if aliquotas.get(ano) and 'premissa' not in aliquotas[ano].origens.values() else 'premissas (as oficiais ainda não estão na base da calculadora)' }}.</li>
+    {% if f.imposto_seletivo_ano %}<li>Imposto Seletivo ({{ f.parte(f.imposto_seletivo_ano)|pct }} do preço em {{ ano }}):
+      {% if a.imposto_seletivo_simulado %}<b>alíquotas simuladas</b> pela calculadora oficial — a lei do IS ainda não as fixou;
+      a meta dos produtos com IS (bebidas açucaradas, alcoólicas, tabaco) pode mudar{% else %}alíquotas oficiais da calculadora{% endif %}.</li>{% endif %}
+    <li>Período de {{ meses }} mês(es) levado a valores por ano: sazonalidade (ex.: dezembro) pode mudar o volume.</li>
+  </ul>
+</div>
+{% endblock %}

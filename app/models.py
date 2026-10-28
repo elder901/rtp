@@ -4,8 +4,8 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import (JSON, Boolean, DateTime, ForeignKey, Integer, LargeBinary, Numeric, String, UniqueConstraint,
-                        func)
+from sqlalchemy import (JSON, Boolean, DateTime, ForeignKey, Index, Integer, LargeBinary, Numeric, String,
+                        UniqueConstraint, func)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -65,7 +65,8 @@ class ControleDFe(Base):
 
 class DocumentoFiscal(Base):
     __tablename__ = "documento"
-    __table_args__ = (UniqueConstraint("empresa_id", "chave"),)
+    # (empresa_id, situacao): a assinatura do cache conta as notas completas sem ler a linha inteira (o XML está nela).
+    __table_args__ = (UniqueConstraint("empresa_id", "chave"), Index("ix_documento_empresa_situacao", "empresa_id", "situacao"))
 
     id: Mapped[int] = mapped_column(primary_key=True)
     empresa_id: Mapped[int] = mapped_column(ForeignKey("empresa.id"), index=True)
@@ -193,3 +194,44 @@ class RegistroApuracao(Base):
     apurado: Mapped[Decimal] = mapped_column(Numeric(18, 2))
     saldo: Mapped[Decimal | None] = mapped_column(Numeric(18, 2))   # débito: saldoDevedor | crédito: saldoCredor
     valores: Mapped[dict] = mapped_column(JSON, default=dict)        # grupo cbs completo, como veio
+
+
+class Usuario(Base):
+    """Quem entra na interface web. Papel: admin (todas as empresas; cadastra empresas e usuários), gestor (as empresas
+    a que tem acesso: cadastra estabelecimentos, importa, classifica e cadastra usuários delas) e consulta (só vê e
+    exporta — ex.: comprador levando a pauta de negociação)."""
+    __tablename__ = "usuario"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    nome: Mapped[str] = mapped_column(String(200))
+    email: Mapped[str] = mapped_column(String(200), unique=True)
+    senha_hash: Mapped[str] = mapped_column(String(300))
+    papel: Mapped[str] = mapped_column(String(10))
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    ultimo_acesso: Mapped[datetime | None] = mapped_column(DateTime)
+
+    acessos: Mapped[list["AcessoEmpresa"]] = relationship(back_populates="usuario", cascade="all, delete-orphan")
+
+
+class AcessoEmpresa(Base):
+    """Empresa (raiz do CNPJ: a pessoa jurídica com todos os estabelecimentos) que um usuário não administrador vê."""
+    __tablename__ = "acesso_empresa"
+    __table_args__ = (UniqueConstraint("usuario_id", "raiz"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"), index=True)
+    raiz: Mapped[str] = mapped_column(String(8))
+
+    usuario: Mapped[Usuario] = relationship(back_populates="acessos")
+
+
+class Sessao(Base):
+    """Sessão aberta no login. O cookie leva um token aleatório; aqui fica só o hash dele."""
+    __tablename__ = "sessao"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    criada_em: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    expira_em: Mapped[datetime] = mapped_column(DateTime)

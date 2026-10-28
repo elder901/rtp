@@ -35,9 +35,9 @@ class Settings(BaseSettings):
     flex_pdv_url: str = ""
     flex_erp_url: str = ""
 
-    # Proteção mínima da interface web até a fase 4 (login multi-cliente). Vazio = sem senha.
-    usuario: str = ""
-    senha: str = ""
+    # Ao subir o servidor, calcula em segundo plano a análise de cada empresa com filiais (período padrão): é a tela
+    # que o comercial abre, e o cálculo leva minutos.
+    aquecer_analises: bool = True
 
 
 settings = Settings()

@@ -40,6 +40,10 @@ def criar_tabelas():
     from app import models  # noqa: F401 — registra os modelos
 
     Base.metadata.create_all(engine)
+    # create_all só cria os índices das tabelas que ele mesmo cria: os novos, em tabelas que já existiam, vêm aqui.
+    for tabela in Base.metadata.sorted_tables:
+        for indice in tabela.indexes:
+            indice.create(engine, checkfirst=True)
 
 
 @contextmanager

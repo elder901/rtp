@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block conteudo %}
+<div class="card">
+  <h2>{{ usuario.nome }}</h2>
+  <p class="suave" style="margin-top:0">{{ usuario.email }} · perfil {{ {'admin': 'Administrador', 'gestor': 'Gestor', 'consulta': 'Consulta'}[usuario.papel] }}</p>
+  <p style="margin-bottom:0">{% if usuario.admin %}Você vê todas as empresas.{% else %}Empresas que você vê:
+    {% for x in empresas %}<a href="/grupos/{{ x.raiz }}">{{ x.nome }}</a>{{ ', ' if not loop.last }}{% else %}nenhuma{% endfor %}.{% endif %}</p>
+</div>
+
+<div class="card">
+  <h2>Trocar a senha</h2>
+  {% if erro %}<div class="alerta" role="alert">{{ erro }}</div>{% endif %}
+  <form method="post" action="/conta">
+    <div class="grade">
+      <div><label for="senha_atual">Senha atual</label><input id="senha_atual" name="senha_atual" type="password" autocomplete="current-password" required></div>
+      <div><label for="nova">Nova senha (mínimo 8)</label><input id="nova" name="nova" type="password" autocomplete="new-password" minlength="8" required></div>
+      <div><label for="confirmacao">Confirme a nova senha</label><input id="confirmacao" name="confirmacao" type="password" autocomplete="new-password" minlength="8" required></div>
+    </div>
+    <div class="acoes"><button type="submit">Trocar senha</button></div>
+  </form>
+  <p class="suave" style="margin-bottom:0">Ao trocar a senha, as sessões abertas em outros computadores são encerradas.</p>
+</div>
+{% endblock %}

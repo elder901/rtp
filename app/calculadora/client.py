@@ -93,6 +93,20 @@ class CalculadoraRTC:
     def versao(self) -> dict:
         return self._dados_abertos("versao")
 
+    def ufs(self) -> list[dict]:
+        """UFs da base oficial: [{sigla, nome, codigo}] (cadastro de estabelecimento; sem "EX", exterior)."""
+        if "ufs" not in self._cache_dados:
+            self._cache_dados["ufs"] = sorted((u for u in self._dados_abertos("ufs") if u["sigla"] != "EX"),
+                                              key=lambda u: u["sigla"])
+        return self._cache_dados["ufs"]
+
+    def municipios(self, uf: str) -> list[dict]:
+        """Municípios da UF na base oficial: [{codigo, nome}] — o código IBGE que a calculadora usa no IBS."""
+        chave = ("municipios", uf.upper())
+        if chave not in self._cache_dados:
+            self._cache_dados[chave] = self._dados_abertos("ufs/municipios", siglaUf=uf.upper())
+        return self._cache_dados[chave]
+
     def identificacao(self) -> dict:
         """Endereço e versão (aplicativo e base de regras) usados no cálculo, para registrar em cada análise.
         Consultada no máximo a cada 10 minutos; se a calculadora não responder, registra o erro."""
@@ -131,7 +145,8 @@ class CalculadoraRTC:
         return self._cache_dados[chave]
 
     def imposto_seletivo(self, ncm: str, data: str = "2027-01-15") -> dict | None:
-        """Dados do IS do NCM na base oficial (alíquotas, unidade), ou None se o NCM não é tributado pelo IS."""
+        """Dados do IS do NCM na base oficial (alíquotas, unidade), ou None se o NCM não é tributado pelo IS.
+        "simulado": a calculadora avisa (cabeçalho x-warning-dados-simulados) que as alíquotas ainda não são as da lei."""
         if ncm[:2] not in CAPITULOS_IS:
             return None
         chave = ("is", ncm, data)
@@ -141,6 +156,8 @@ class CalculadoraRTC:
             except httpx.HTTPError as e:
                 raise CalculadoraIndisponivel(f"calculadora indisponível em {self.base_url}: {e}") from e
             info = r.json() if r.status_code == 200 else {}
+            if info.get("tributadoPeloImpostoSeletivo"):
+                info["simulado"] = r.headers.get("x-warning-dados-simulados") == "1"
             self._cache_dados[chave] = info if info.get("tributadoPeloImpostoSeletivo") else None
         return self._cache_dados[chave]
 

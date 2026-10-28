@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_local.html" import campos_local %}
 {% block conteudo %}
 <div class="card">
   <h2>Notas fiscais</h2>
@@ -78,13 +79,11 @@
 <div class="card">
   <h2>Dados e premissas</h2>
   <form method="post" action="/empresas/{{ e.id }}/dados">
+    <p class="suave" style="margin-top:-6px">Regime: <b>{{ {'real':'Lucro Real','presumido':'Lucro Presumido','simples':'Simples Nacional'}[e.regime] }}</b>
+      — é da empresa e vale para todos os estabelecimentos; muda na <a href="/grupos/{{ e.cnpj[:8] }}">visão geral da empresa</a>.</p>
     <div class="grade">
-      <div><label>Regime atual</label><select name="regime" id="regime"
-          onchange="document.getElementById('premissas-simples').hidden = this.value !== 'simples'">
-        {% for v, t in [('real','Lucro Real'),('presumido','Lucro Presumido'),('simples','Simples Nacional')] %}
-        <option value="{{ v }}" {{ 'selected' if e.regime == v }}>{{ t }}</option>{% endfor %}</select></div>
-      <div><label>UF</label><input name="uf" value="{{ e.uf }}" maxlength="2" required></div>
-      <div><label>Município (IBGE)</label><input name="municipio" type="number" value="{{ e.cod_municipio }}" required></div>
+      <div><label for="nome">Nome do estabelecimento</label><input id="nome" name="nome" value="{{ e.nome }}" required></div>
+      {{ campos_local(ufs, municipios, e.uf, e.cod_municipio) }}
       <div><label>Ambiente SEFAZ</label><select name="ambiente_dfe">
         <option value="1" {{ 'selected' if e.ambiente_dfe == 1 }}>Produção</option>
         <option value="2" {{ 'selected' if e.ambiente_dfe == 2 }}>Homologação</option></select></div>

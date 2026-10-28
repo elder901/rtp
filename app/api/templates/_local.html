@@ -1,0 +1,16 @@
+{# Campos de UF e município pela base oficial da calculadora (o código IBGE que vai para o IBS). Trocar a UF recarrega
+   os municípios (script no base.html). Sem a calculadora, viram texto: UF e código IBGE. #}
+{% macro campos_local(ufs, municipios, uf='', municipio='') %}
+{% if ufs %}
+  <div><label>UF</label><select name="uf" data-uf required>
+    {% for x in ufs %}<option value="{{ x.sigla }}" {{ 'selected' if x.sigla == (uf or '')|upper }}>{{ x.sigla }} — {{ x.nome|nome_proprio }}</option>{% endfor %}
+  </select></div>
+  <div><label>Município</label><select name="municipio" data-municipio required>
+    <option value="">Escolha…</option>
+    {% for m in municipios %}<option value="{{ m.codigo }}" {{ 'selected' if m.codigo|string == municipio|string }}>{{ m.nome }}</option>{% endfor %}
+  </select></div>
+{% else %}
+  <div><label>UF</label><input name="uf" value="{{ uf }}" maxlength="2" required></div>
+  <div><label>Município (código IBGE)</label><input name="municipio" type="number" value="{{ municipio }}" required></div>
+{% endif %}
+{% endmacro %}

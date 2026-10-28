@@ -56,3 +56,34 @@ def test_cenarios_de_preco_e_margem(analise):
     p27 = negociacao.produtos(analise, negociacao.compras(analise, 2027), 2027)[0]
     # 2027, ninguém muda preço: a perda de crédito na compra é compensada pelo fim do PIS/COFINS na venda
     assert abs(p27.cenarios_preco(2027)[1].margem - D("6.62")) <= D("0.01")
+
+
+def _analise_papel(compra: str, venda: str):
+    from app.parser.nfe import ler_nfe
+
+    docs = [ler_nfe(compra.encode()), ler_nfe(venda.encode())]
+    return analisar(Empresa("12345678000195", "EXEMPLO", "real", "MG", 3103504), docs, Premissas(anos=[2033]),
+                    CalculadoraFake(), {f"ean:{EAN}": ("200", "200035")})
+
+
+def test_loja_vende_o_fardo_com_o_ean_da_unidade():
+    """Compra de 1 fardo (qCom) = 10 pacotes (qTrib, EAN do pacote); a loja vende o fardo inteiro como 'PCT' com o
+    EAN do pacote. Sem conversão a margem seria de 93%; com o fator 10 da própria nota volta ao razoável."""
+    compra = (FX / "papel" / "compra.xml").read_text(encoding="utf-8").replace(
+        "<uCom>PCT</uCom>", "<uCom>FD</uCom>").replace("<qCom>10.0000</qCom>", "<qCom>1.0000</qCom>")
+    venda = (FX / "papel" / "venda.xml").read_text(encoding="utf-8").replace(
+        "<qCom>10.0000</qCom>", "<qCom>1.0000</qCom>").replace("<qTrib>10.0000</qTrib>", "<qTrib>1.0000</qTrib>")
+    a = _analise_papel(compra, venda)
+    p = negociacao.produtos(a, negociacao.compras(a, 2033), 2033)[0]
+    assert p.fator_unidade == 10
+    hoje = p.cenarios_preco(2033)[0]
+    assert (hoje.preco, hoje.custo, hoje.margem) == (D("289.00"), D("148.83"), D("66.23"))
+
+
+def test_unidade_que_nao_se_explica_fica_sem_custo():
+    venda = (FX / "papel" / "venda.xml").read_text(encoding="utf-8").replace(
+        "<qCom>10.0000</qCom>", "<qCom>1.0000</qCom>").replace("<qTrib>10.0000</qTrib>", "<qTrib>1.0000</qTrib>")
+    a = _analise_papel((FX / "papel" / "compra.xml").read_text(encoding="utf-8"), venda)
+    p = negociacao.produtos(a, negociacao.compras(a, 2033), 2033)[0]
+    assert p.unidades_incompativeis
+    assert p.cenarios_preco(2033)[0].custo is None and p.margem_ano_precos_hoje(2033) is None

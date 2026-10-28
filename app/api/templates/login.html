@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block conteudo %}
+<div class="card acesso">
+  <p class="marca-acesso">RTP<small>Planejamento da Reforma Tributária</small></p>
+  <h2>Entrar</h2>
+  {% if erro %}<div class="alerta" role="alert">{{ erro }}</div>{% endif %}
+  <form method="post" action="/login">
+    <input type="hidden" name="prox" value="{{ prox }}">
+    <div><label for="email">E-mail</label><input id="email" name="email" type="email" autocomplete="username" required autofocus></div>
+    <div><label for="senha">Senha</label><input id="senha" name="senha" type="password" autocomplete="current-password" required></div>
+    <div class="acoes"><button type="submit">Entrar</button></div>
+  </form>
+  <p class="suave" style="margin-bottom:0">Esqueceu a senha? Peça a um administrador ou ao gestor da sua empresa para
+    redefinir.</p>
+</div>
+{% endblock %}

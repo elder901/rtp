@@ -35,6 +35,11 @@
   <h2>Preço de venda e margem — por {{ p.unidade_venda }}, hoje × {{ ano }}</h2>
   <p class="suave" style="margin-top:-6px">Combinações das duas decisões: manter o preço de gôndola ou a margem; o fornecedor
     manter o preço de nota ou repassar a queda de tributos. Margem = valor líquido da venda − custo efetivo da compra.</p>
+  {% if p.fator_unidade and p.fator_unidade != 1 %}<div class="alerta">A loja vende este EAN em embalagem de
+    {{ p.fator_unidade }} unidades da compra (o preço só se explica assim): custo por embalagem.</div>
+  {% elif p.unidades_incompativeis %}<div class="alerta">O preço de venda por {{ p.unidade_venda }} não se explica
+    pelo custo de compra nessa unidade nem por embalagem (margem abaixo de −50% ou acima de 70%): confira o
+    cadastro. Custo e margem ficam de fora.</div>{% endif %}
   <div class="tabela"><table>
     <tr><th class="txt">Cenário</th><th>Preço ao consumidor</th><th>Δ preço</th><th>Custo efetivo</th><th>Margem</th><th>Margem %</th><th>Δ margem</th></tr>
     {% set base = cenarios[0] %}

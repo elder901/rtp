@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from app.calculadora.client import CalculadoraRTC, ErroCalculadora
-from app.engine.cenarios import CFOP_ONEROSOS, CLASSIFICACAO_PADRAO, Classificacoes
+from app.engine.cenarios import CFOP_ONEROSOS, CLASSIFICACAO_PADRAO, Classificacoes, anexo_do_produto, cede_ao_anexo
 from app.parser.nfe import Documento
 
 ZERO = Decimal("0")
@@ -116,12 +116,13 @@ def produtos(documentos: list[Documento], cnpj: str, ajustes,
         if achado:
             (p.cst, p.cclasstrib), p.chave_manual = achado
             p.origem = "manual"
-        elif chave in consenso:
+        elif chave in consenso and not cede_ao_anexo(consenso[chave], p.ncm, p.descricao, anexos):
             (p.cst, p.cclasstrib), p.origem = consenso[chave], "fornecedor"
-        elif com_xml:
+        elif com_xml and not cede_ao_anexo((com_xml.ibscbs.cst, com_xml.ibscbs.cclasstrib), p.ncm, p.descricao,
+                                           anexos):
             p.cst, p.cclasstrib, p.origem = com_xml.ibscbs.cst, com_xml.ibscbs.cclasstrib, "xml"
-        elif p.ncm in anexos:
-            (p.cst, p.cclasstrib), p.origem = anexos[p.ncm], "anexo"
+        elif anexo_do_produto(p.ncm, p.descricao, anexos):
+            (p.cst, p.cclasstrib), p.origem = anexo_do_produto(p.ncm, p.descricao, anexos), "anexo"
         else:
             p.cst, p.cclasstrib = CLASSIFICACAO_PADRAO
 

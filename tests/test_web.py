@@ -1,17 +1,16 @@
 from datetime import date
 from urllib.parse import urlencode
 
-from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app import classificacao, db, models, servicos
 from app.api import main
-from tests.conftest import CNPJ_EMPRESA, FX, CalculadoraFake, gerar_pfx
+from tests.conftest import CNPJ_EMPRESA, FX, CalculadoraFake, cliente_logado, gerar_pfx
 
 
 def _cliente(monkeypatch):
     monkeypatch.setattr(main, "calculadora", CalculadoraFake())
-    return TestClient(main.app)
+    return cliente_logado()
 
 
 def _xmls():
@@ -22,8 +21,11 @@ def test_fluxo_completo(banco, monkeypatch):
     c = _cliente(monkeypatch)
     r = c.post("/empresas", data={"cnpj": "11.222.333/0001-81", "nome": "LOJA TESTE", "regime": "real", "uf": "sp",
                                   "municipio": "3550308"}, follow_redirects=False)
-    assert r.status_code == 303
-    url = r.headers["location"]
+    assert r.status_code == 303 and r.headers["location"] == "/grupos/11222333"   # a empresa, com a matriz dentro
+    geral = c.get("/grupos/11222333").text
+    assert "Empresa cadastrada" in geral and "LOJA TESTE" in geral and "Matriz" in geral
+    with db.sessao() as s:
+        url = f"/empresas/{s.scalar(select(models.Empresa.id))}"
 
     r = c.post(url + "/xmls", files=_xmls())
     assert "Importação: 4 novas" in r.text and "1 rejeitadas" in r.text
@@ -84,11 +86,3 @@ def test_filtro_de_periodo(banco):
         assert len(servicos.documentos(s, e, date(2026, 3, 11), date(2026, 3, 31))) == 3
         assert len(servicos.documentos(s, e, fim=date(2026, 3, 10))) == 1
 
-
-def test_login_basico(banco, monkeypatch):
-    c = _cliente(monkeypatch)
-    monkeypatch.setattr(main.settings, "usuario", "bix")
-    monkeypatch.setattr(main.settings, "senha", "s3nha")
-    assert c.get("/").status_code == 401
-    assert c.get("/", auth=("bix", "errada")).status_code == 401
-    assert c.get("/", auth=("bix", "s3nha")).status_code == 200

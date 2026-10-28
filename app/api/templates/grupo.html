@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% from "_local.html" import campos_local %}
+{% set nomes_regime = {'real': 'Lucro Real', 'presumido': 'Lucro Presumido', 'simples': 'Simples Nacional'} %}
+{% block conteudo %}
+<div class="card">
+  <div class="indicadores">
+    <div class="indicador"><div class="rotulo">Estabelecimentos</div><div class="valor">{{ linhas|length }}</div></div>
+    <div class="indicador"><div class="rotulo">NF-e completas</div><div class="valor">{{ linhas|sum(attribute='notas') }}</div></div>
+    <div class="indicador"><div class="rotulo">Regime</div><div class="valor" style="font-size:18px">{{ nomes_regime[grupo.regime] }}</div></div>
+  </div>
+  <p style="margin-bottom:0">Análises da empresa inteira (todos os estabelecimentos juntos, sem as transferências entre eles):
+    <a href="{{ base }}/analise">Análise</a> · <a href="{{ base }}/fornecedores">Fornecedores e pautas de negociação</a> ·
+    <a href="{{ base }}/produtos">Produtos</a></p>
+</div>
+
+<div class="card">
+  <h2>Estabelecimentos</h2>
+  <p class="suave" style="margin-top:-6px">Cada estabelecimento tem as próprias notas, certificado, classificação e
+    apuração. Abra para importar notas e ver os dados dele.</p>
+  <div class="tabela"><table>
+    <tr><th class="txt">Estabelecimento</th><th class="txt">CNPJ</th><th class="txt">Tipo</th><th class="txt">Município</th>
+        <th>NF-e completas</th><th class="txt">Certificado A1</th></tr>
+    {% for l in linhas %}
+    <tr><td class="txt"><a href="/empresas/{{ l.e.id }}">{{ l.e.nome }}</a>{% if l.e.industria %} <span class="tag">indústria</span>{% endif %}</td>
+      <td class="txt" style="font-family:monospace">{{ l.e.cnpj[:2] }}.{{ l.e.cnpj[2:5] }}.{{ l.e.cnpj[5:8] }}/{{ l.e.cnpj[8:12] }}-{{ l.e.cnpj[12:] }}</td>
+      <td class="txt">{{ 'Matriz' if l.e.cnpj[8:12] == '0001' else 'Filial' }}</td>
+      <td class="txt">{{ l.municipio or l.e.cod_municipio }}/{{ l.e.uf }}</td><td>{{ l.notas }}</td>
+      <td class="txt">{{ ('até ' ~ l.cert.validade.strftime('%d/%m/%Y')) if l.cert else '—' }}</td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+
+{% if usuario.pode_editar %}
+<div class="card" id="incluir">
+  <h2>Incluir estabelecimento (filial)</h2>
+  <form method="post" action="{{ base }}/estabelecimentos">
+    <div class="grade">
+      <div><label for="cnpj">CNPJ</label><input id="cnpj" name="cnpj" value="{{ grupo.raiz }}" inputmode="numeric" required></div>
+      <div><label for="nome">Nome (ex.: Loja 05 - Centro)</label><input id="nome" name="nome" required></div>
+      {{ campos_local(ufs, municipios, dados.uf, '') }}
+      <div><label class="check" style="margin-top:28px"><input type="checkbox" name="industria" value="true"> Indústria (credita IPI)</label></div>
+    </div>
+    <div class="acoes"><button type="submit">Incluir estabelecimento</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Dados da empresa</h2>
+  <form method="post" action="{{ base }}/dados">
+    <div class="grade">
+      <div><label for="regime">Regime de apuração (vale para todos os estabelecimentos)</label><select id="regime" name="regime">
+        {% for v, t in nomes_regime.items() %}<option value="{{ v }}" {{ 'selected' if grupo.regime == v }}>{{ t }}</option>{% endfor %}</select></div>
+    </div>
+    <div class="acoes"><button type="submit">Salvar</button></div>
+  </form>
+  <h3 style="font-size:13px">Quem tem acesso</h3>
+  <p style="margin:0">{% for x in usuarios %}{{ x.nome }} <span class="suave">({{ papeis[x.papel]|lower }}{{ ', desativado' if not x.ativo }})</span>{{ ' · ' if not loop.last }}{% else %}<span class="suave">Só os administradores.</span>{% endfor %}
+    · <a href="/usuarios">Gerenciar usuários</a></p>
+</div>
+{% endif %}
+{% endblock %}

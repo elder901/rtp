@@ -2,7 +2,8 @@
 painel de impacto.
 
 Executar: python -m uvicorn app.api.main:app --port 8000   (escuta só em 127.0.0.1 por padrão)
-Defina RTP_USUARIO e RTP_SENHA para exigir login básico — obrigatório se o servidor for exposto na rede.
+Toda tela exige login (usuários em app/auth.py). O primeiro administrador é criado na tela /primeiro-acesso, só a
+partir desta máquina, ou por `python -m app.cli usuarios criar`.
 """
 from __future__ import annotations
 
@@ -11,9 +12,9 @@ import csv
 import io
 import json
 import logging
-import secrets
 import threading
-from collections import OrderedDict
+import time
+from collections import Counter, OrderedDict, defaultdict
 from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -22,15 +23,15 @@ from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import case, func, select
+from sqlalchemy import func, select
 
+from app import auth, cobertura
 from app import classificacao as classif
-from app import cobertura
 from app import db, models, servicos
 from app.engine.cenarios import anexos_por_ncm, consenso_fornecedores, declaracoes_fornecedores, xml_incompativeis
+from app.engine.premissas import TRANSICAO
 from app.api.grafico import linha_do_tempo
 from app.apuracao import conciliacao
 from app.apuracao import servico as apuracao
@@ -41,11 +42,11 @@ from app.dfe.certificado import CertificadoInvalido
 from app.dfe.sincronizar import sincronizar, sincronizar_pendentes
 from app.ingest.arquivos import ler_classificacoes
 from app.relatorios import agregacao, negociacao
-from app.relatorios.excel import exportar, exportar_negociacao
+from app.relatorios.excel import exportar, exportar_negociacao, exportar_pauta
 
 log = logging.getLogger(__name__)
 calculadora = CalculadoraRTC()
-AVISOS: dict[int, list[str]] = {}  # mensagens exibidas uma vez na página da empresa
+AVISOS: dict[int | str, list[str]] = {}  # mensagens exibidas uma vez (empresa, "grupo:raiz", "usuarios"...)
 
 
 def _verificar_apuracoes():
@@ -79,26 +80,81 @@ def _garantir_calculadora_local():
         log.exception("Não foi possível iniciar a calculadora local")
 
 
+def _aquecer_analises():
+    """Deixa pronta, no período padrão, a análise de cada pessoa jurídica com mais de um estabelecimento — a visão que
+    o comercial usa para negociar — e as compras do primeiro ano da transição."""
+    with db.sessao() as s:
+        raizes = Counter(servicos.raiz_cnpj(e.cnpj) for e in s.scalars(select(models.Empresa)))
+    for raiz, estabelecimentos in raizes.items():
+        if estabelecimentos < 2:
+            continue
+        try:
+            _, a = _analise_grupo(raiz, None, None)
+            _compras_do_ano(a, a.premissas.anos[0])
+            log.info("Análise do grupo %s pronta (%d itens)", raiz, len(a.itens))
+        except Exception:  # noqa: BLE001 — sem a análise pronta, a tela calcula na primeira visita
+            log.exception("Não foi possível preparar a análise do grupo %s", raiz)
+
+
 @asynccontextmanager
 async def ciclo_de_vida(_app: FastAPI):
     db.criar_tabelas()
     await asyncio.to_thread(_garantir_calculadora_local)
     tarefa = asyncio.create_task(_agendador()) if settings.dfe_agendador else None
+    if settings.aquecer_analises:
+        asyncio.get_running_loop().run_in_executor(None, _aquecer_analises)
     yield
     if tarefa:
         tarefa.cancel()
 
 
-_basic = HTTPBasic(auto_error=False)
+# --- Acesso: sessão, perfil e empresas liberadas para o usuário ----------------------------------------------------
+
+ROTAS_PUBLICAS = {"/login", "/primeiro-acesso", "/saude"}
+ROTAS_DE_QUALQUER_PERFIL = {"/sair", "/conta"}      # alterações que o perfil de consulta também faz
+ENDERECOS_LOCAIS = {"127.0.0.1", "::1"}
+MAX_TENTATIVAS, JANELA_TENTATIVAS = 5, 600         # logins errados por IP em 10 minutos
+_TENTATIVAS: dict[str, list[float]] = {}
 
 
-def autenticar(request: Request, cred: HTTPBasicCredentials | None = Depends(_basic)):
-    if not settings.usuario or request.url.path.startswith("/webhooks/"):
+def autenticar(request: Request):
+    """Toda rota passa aqui: exige sessão, confere se a empresa da URL (empresa_id ou raiz) está liberada para o
+    usuário e bloqueia alterações do perfil de consulta. Empresa não liberada responde 404, como se não existisse."""
+    caminho = request.url.path
+    if caminho in ROTAS_PUBLICAS or caminho.startswith("/webhooks/"):
         return
-    ok = cred and secrets.compare_digest(cred.username, settings.usuario) and \
-        secrets.compare_digest(cred.password, settings.senha)
-    if not ok:
-        raise HTTPException(401, "Login necessário", headers={"WWW-Authenticate": "Basic"})
+    token = request.cookies.get(auth.COOKIE)
+    with db.sessao() as s:
+        u = auth.usuario_da_sessao(s, token) if token else None
+        if u is None:
+            if request.method == "GET":
+                destino = caminho + (f"?{request.url.query}" if request.url.query else "")
+                raise HTTPException(303, "Login necessário",
+                                    headers={"Location": "/login?" + urlencode({"prox": destino})})
+            raise HTTPException(401, "Login necessário")
+        raiz = request.path_params.get("raiz")
+        if "empresa_id" in request.path_params:
+            id_ = str(request.path_params["empresa_id"])
+            e = s.get(models.Empresa, int(id_)) if id_.isdigit() else None
+            if e is None:
+                raise HTTPException(404, "Empresa não encontrada")
+            raiz = servicos.raiz_cnpj(e.cnpj)
+        if raiz is not None and not u.ve(raiz):
+            raise HTTPException(404, "Empresa não encontrada")
+    if request.method not in ("GET", "HEAD") and not u.pode_editar and caminho not in ROTAS_DE_QUALQUER_PERFIL:
+        raise HTTPException(403, "Seu perfil é de consulta: pode ver e exportar, não alterar.")
+    request.state.usuario = u
+
+
+def _usuario(request: Request) -> auth.Logado:
+    return request.state.usuario
+
+
+def _exigir(request: Request, *papeis: str) -> auth.Logado:
+    u = _usuario(request)
+    if u.papel not in papeis:
+        raise HTTPException(403, "Seu perfil não permite esta ação.")
+    return u
 
 
 app = FastAPI(title="RTP — Planejamento da Reforma Tributária", lifespan=ciclo_de_vida,
@@ -116,8 +172,14 @@ def _pct(v) -> str:
     return "—" if v is None else f"{v:.2f}".replace(".", ",") + "%"
 
 
+def _nome_proprio(v: str) -> str:
+    """'MATO GROSSO DO SUL' -> 'Mato Grosso do Sul'."""
+    return " ".join(p if p in ("de", "do", "da", "dos", "das", "e") else p.capitalize() for p in v.lower().split())
+
+
 templates.env.filters["brl"] = _brl
 templates.env.filters["pct"] = _pct
+templates.env.filters["nome_proprio"] = _nome_proprio
 
 
 def _avisar(empresa_id: int, *mensagens: str):
@@ -136,47 +198,399 @@ def _carregar(s, empresa_id: int) -> models.Empresa:
 
 
 def _render(request: Request, nome: str, **ctx):
+    """Página com o menu: a empresa (pessoa jurídica) e, dentro dela, os estabelecimentos — o atual aberto com as
+    suas seções."""
+    ctx.setdefault("usuario", getattr(request.state, "usuario", None))
     e = ctx.get("e")
-    if isinstance(e, models.Empresa) and "grupo" not in ctx:
-        # Nas telas do estabelecimento o base.html oferece o link da visão consolidada quando a pessoa
-        # jurídica (raiz do CNPJ) tem mais de um estabelecimento cadastrado.
-        raiz = servicos.raiz_cnpj(e.cnpj)
+    if "grupo" in ctx:
+        ctx.setdefault("corp", ctx["grupo"])
+    elif isinstance(e, models.Empresa):
         with db.sessao() as s:
-            n = len(servicos.estabelecimentos_da_raiz(s, raiz))
-        if n > 1:
-            ctx["grupo_da_empresa"] = {"raiz": raiz, "n": n}
+            ctx["corp"] = _Grupo(servicos.estabelecimentos_da_raiz(s, servicos.raiz_cnpj(e.cnpj)))
+        ctx["estab_atual"] = e.id
     return templates.TemplateResponse(request, nome, ctx)
 
 
-# --- Empresas ----------------------------------------------------------------------------------------------------
+def _locais(uf: str = "") -> dict:
+    """UFs e municípios da base oficial da calculadora para os campos de endereço. Sem a calculadora, os campos viram
+    texto (UF e código IBGE)."""
+    if not hasattr(calculadora, "ufs"):
+        return {"ufs": [], "municipios": []}
+    try:
+        ufs = calculadora.ufs()
+        return {"ufs": ufs, "municipios": calculadora.municipios(uf) if uf else []}
+    except (CalculadoraIndisponivel, ErroCalculadora):
+        return {"ufs": [], "municipios": []}
+
+
+def _nomes_municipios(empresas: list[models.Empresa]) -> dict[int, str]:
+    nomes: dict[int, str] = {}
+    if not hasattr(calculadora, "municipios"):
+        return nomes
+    for uf in {e.uf for e in empresas}:
+        try:
+            nomes.update({m["codigo"]: m["nome"] for m in calculadora.municipios(uf)})
+        except (CalculadoraIndisponivel, ErroCalculadora):
+            pass
+    return nomes
+
+
+def _cnpj_valido(cnpj: str) -> bool:
+    """Dígitos verificadores do CNPJ (evita cadastrar estabelecimento com CNPJ digitado errado)."""
+    if len(cnpj) != 14 or not cnpj.isdigit() or len(set(cnpj)) == 1:
+        return False
+    for n in (12, 13):
+        pesos = list(range(n - 7, 1, -1)) + list(range(9, 1, -1))
+        resto = sum(int(d) * p for d, p in zip(cnpj[:n], pesos)) % 11
+        if int(cnpj[n]) != (0 if resto < 2 else 11 - resto):
+            return False
+    return True
+
+
+# --- Login, primeiro acesso, conta e usuários ----------------------------------------------------------------------
+
+def _destino(prox: str) -> str:
+    return prox if prox.startswith("/") and not prox.startswith("//") else "/"
+
+
+def _com_sessao(resposta: Response, request: Request, token: str) -> Response:
+    resposta.set_cookie(auth.COOKIE, token, httponly=True, samesite="lax", secure=request.url.scheme == "https")
+    return resposta
+
+
+def _tela_login(request: Request, erro: str = "", prox: str = "/", status: int = 200):
+    r = _render(request, "login.html", sem_menu=True, erro=erro, prox=prox)
+    r.status_code = status
+    return r
+
+
+@app.get("/login", response_class=HTMLResponse)
+def tela_login(request: Request, prox: str = "/"):
+    with db.sessao() as s:
+        if not auth.ha_usuarios(s):
+            return RedirectResponse("/primeiro-acesso", status_code=303)
+    return _tela_login(request, prox=_destino(prox))
+
+
+@app.post("/login")
+def entrar(request: Request, email: str = Form(...), senha: str = Form(...), prox: str = Form("/")):
+    ip = request.client.host if request.client else "?"
+    agora = time.time()
+    erros = [t for t in _TENTATIVAS.get(ip, []) if agora - t < JANELA_TENTATIVAS]
+    if len(erros) >= MAX_TENTATIVAS:
+        return _tela_login(request, "Muitas tentativas erradas. Aguarde alguns minutos.", prox, 429)
+    with db.sessao() as s:
+        u = auth.verificar_login(s, email, senha)
+        if u is None:
+            _TENTATIVAS[ip] = erros + [agora]
+            return _tela_login(request, "E-mail ou senha incorretos.", prox, 401)
+        token = auth.abrir_sessao(s, u)
+    _TENTATIVAS.pop(ip, None)
+    return _com_sessao(RedirectResponse(_destino(prox), status_code=303), request, token)
+
+
+def _primeiro_acesso_local(request: Request) -> bool:
+    return bool(request.client) and request.client.host in ENDERECOS_LOCAIS
+
+
+@app.get("/primeiro-acesso", response_class=HTMLResponse)
+def tela_primeiro_acesso(request: Request):
+    with db.sessao() as s:
+        if auth.ha_usuarios(s):
+            return RedirectResponse("/login", status_code=303)
+    return _render(request, "primeiro_acesso.html", sem_menu=True, erro="", local=_primeiro_acesso_local(request),
+                   dados={})
+
+
+@app.post("/primeiro-acesso")
+def criar_primeiro_administrador(request: Request, nome: str = Form(...), email: str = Form(...),
+                                 senha: str = Form(...), confirmacao: str = Form(...)):
+    """Cria o primeiro administrador. Só quando ainda não há usuário e só a partir da própria máquina do servidor."""
+    if not _primeiro_acesso_local(request):
+        raise HTTPException(403, "O primeiro administrador só pode ser criado na máquina do servidor.")
+    with db.sessao() as s:
+        if auth.ha_usuarios(s):
+            return RedirectResponse("/login", status_code=303)
+        try:
+            if senha != confirmacao:
+                raise ValueError("A confirmação não confere com a senha.")
+            u = auth.criar_usuario(s, nome, email, senha, "admin")
+        except ValueError as erro:
+            return _render(request, "primeiro_acesso.html", sem_menu=True, erro=str(erro), local=True,
+                           dados={"nome": nome, "email": email})
+        token = auth.abrir_sessao(s, u)
+    return _com_sessao(RedirectResponse("/", status_code=303), request, token)
+
+
+@app.post("/sair")
+def sair(request: Request):
+    token = request.cookies.get(auth.COOKIE)
+    if token:
+        with db.sessao() as s:
+            auth.encerrar_sessao(s, token)
+    resposta = RedirectResponse("/login", status_code=303)
+    resposta.delete_cookie(auth.COOKIE)
+    return resposta
+
+
+def _empresas_visiveis(s, u: auth.Logado) -> list[dict]:
+    """Empresas (raiz do CNPJ) que o usuário vê: nome da matriz e estabelecimentos, para listas e permissões."""
+    por_raiz: dict[str, list[models.Empresa]] = defaultdict(list)
+    for e in s.scalars(select(models.Empresa)):
+        if u.ve(servicos.raiz_cnpj(e.cnpj)):
+            por_raiz[servicos.raiz_cnpj(e.cnpj)].append(e)
+    saida = []
+    for raiz, es in por_raiz.items():
+        es.sort(key=lambda e: e.cnpj[8:12])
+        saida.append({"raiz": raiz, "nome": es[0].nome, "regime": es[0].regime, "uf": es[0].uf, "empresas": es})
+    return sorted(saida, key=lambda x: x["nome"].lower())
+
+
+@app.get("/conta", response_class=HTMLResponse)
+def tela_conta(request: Request):
+    u = _usuario(request)
+    with db.sessao() as s:
+        empresas = _empresas_visiveis(s, u)
+    return _render(request, "conta.html", aba="conta", empresas=empresas, erro="",
+                   avisos=AVISOS.pop(f"conta:{u.id}", []))
+
+
+@app.post("/conta")
+def trocar_minha_senha(request: Request, senha_atual: str = Form(...), nova: str = Form(...),
+                       confirmacao: str = Form(...)):
+    u = _usuario(request)
+    with db.sessao() as s:
+        usuario = s.get(models.Usuario, u.id)
+        try:
+            if not auth.confere_senha(senha_atual, usuario.senha_hash):
+                raise ValueError("A senha atual não confere.")
+            if nova != confirmacao:
+                raise ValueError("A confirmação não confere com a nova senha.")
+            auth.trocar_senha(s, usuario, nova)       # encerra todas as sessões, inclusive esta
+        except ValueError as erro:
+            empresas = _empresas_visiveis(s, u)
+            return _render(request, "conta.html", aba="conta", empresas=empresas, erro=str(erro))
+        token = auth.abrir_sessao(s, usuario)
+    AVISOS.setdefault(f"conta:{u.id}", []).append("Senha alterada. As outras sessões abertas foram encerradas.")
+    return _com_sessao(RedirectResponse("/conta", status_code=303), request, token)
+
+
+def _pode_gerir(editor: auth.Logado, alvo: models.Usuario) -> bool:
+    """O administrador gere todos; o gestor, os usuários que só veem empresas dele (nunca um administrador)."""
+    if editor.admin:
+        return True
+    raizes = {a.raiz for a in alvo.acessos}
+    return alvo.papel != "admin" and bool(raizes) and raizes <= editor.raizes
+
+
+def _validar_permissoes(editor: auth.Logado, papel: str, empresas: list[str]):
+    if papel not in auth.PAPEIS:
+        raise ValueError("Perfil inválido.")
+    if not editor.admin:
+        if papel == "admin":
+            raise ValueError("Só um administrador cria outro administrador.")
+        if not empresas:
+            raise ValueError("Escolha ao menos uma empresa.")
+        if not set(empresas) <= editor.raizes:
+            raise ValueError("Você só pode liberar as empresas a que tem acesso.")
+
+
+def _tela_usuarios(request: Request, erro: str = "", dados: dict | None = None):
+    u = _usuario(request)
+    with db.sessao() as s:
+        usuarios = [x for x in s.scalars(select(models.Usuario).order_by(models.Usuario.nome)) if _pode_gerir(u, x)]
+        linhas = [{"u": x, "raizes": sorted(a.raiz for a in x.acessos)} for x in usuarios]
+        empresas = _empresas_visiveis(s, u)
+    nomes = {x["raiz"]: x["nome"] for x in empresas}
+    return _render(request, "usuarios.html", aba="usuarios", linhas=linhas, empresas=empresas, nomes=nomes,
+                   papeis=auth.PAPEIS, erro=erro, dados=dados or {}, avisos=AVISOS.pop("usuarios", []))
+
+
+@app.get("/usuarios", response_class=HTMLResponse)
+def tela_usuarios(request: Request):
+    _exigir(request, "admin", "gestor")
+    return _tela_usuarios(request)
+
+
+@app.post("/usuarios")
+def criar_usuario(request: Request, nome: str = Form(...), email: str = Form(...), senha: str = Form(...),
+                  papel: str = Form(...), empresas: list[str] = Form([])):
+    editor = _exigir(request, "admin", "gestor")
+    try:
+        _validar_permissoes(editor, papel, empresas)
+        with db.sessao() as s:
+            auth.criar_usuario(s, nome, email, senha, papel, [] if papel == "admin" else empresas)
+    except ValueError as erro:
+        return _tela_usuarios(request, str(erro), {"nome": nome, "email": email, "papel": papel, "empresas": empresas})
+    AVISOS.setdefault("usuarios", []).append(f"Usuário {email.strip().lower()} criado. Passe a senha inicial a ele; "
+                                              f"ele pode trocá-la em Minha conta.")
+    return RedirectResponse("/usuarios", status_code=303)
+
+
+@app.get("/usuarios/{usuario_id}", response_class=HTMLResponse)
+def tela_usuario(request: Request, usuario_id: int):
+    editor = _exigir(request, "admin", "gestor")
+    with db.sessao() as s:
+        alvo = s.get(models.Usuario, usuario_id)
+        if alvo is None or not _pode_gerir(editor, alvo):
+            raise HTTPException(404, "Usuário não encontrado")
+        raizes = {a.raiz for a in alvo.acessos}
+        empresas = _empresas_visiveis(s, editor)
+        return _render(request, "usuario.html", aba="usuarios", alvo=alvo, raizes=raizes, empresas=empresas,
+                       papeis=auth.PAPEIS, erro="")
+
+
+@app.post("/usuarios/{usuario_id}")
+def salvar_usuario(request: Request, usuario_id: int, nome: str = Form(...), papel: str = Form(...),
+                   ativo: bool = Form(False), empresas: list[str] = Form([]), nova_senha: str = Form("")):
+    editor = _exigir(request, "admin", "gestor")
+    with db.sessao() as s:
+        alvo = s.get(models.Usuario, usuario_id)
+        if alvo is None or not _pode_gerir(editor, alvo):
+            raise HTTPException(404, "Usuário não encontrado")
+        try:
+            if alvo.id == editor.id:                  # ninguém tira o próprio acesso por engano
+                papel, ativo = alvo.papel, True
+            _validar_permissoes(editor, papel, empresas)
+            if not nome.strip():
+                raise ValueError("Informe o nome.")
+            # o gestor só mexe nas empresas dele: as que ele não vê continuam como estavam
+            fora_do_editor = set() if editor.admin else {a.raiz for a in alvo.acessos} - editor.raizes
+            alvo.nome, alvo.papel = nome.strip(), papel
+            auth.definir_acessos(alvo, [] if papel == "admin" else set(empresas) | fora_do_editor)
+            if alvo.ativo and not ativo:
+                auth.encerrar_sessoes(s, alvo.id)
+            alvo.ativo = ativo
+            if nova_senha:
+                auth.trocar_senha(s, alvo, nova_senha)
+        except ValueError as erro:
+            s.rollback()
+            alvo = s.get(models.Usuario, usuario_id)
+            return _render(request, "usuario.html", aba="usuarios", alvo=alvo, raizes={a.raiz for a in alvo.acessos},
+                           empresas=_empresas_visiveis(s, editor), papeis=auth.PAPEIS, erro=str(erro))
+    AVISOS.setdefault("usuarios", []).append("Usuário atualizado." + (" Senha redefinida." if nova_senha else ""))
+    return RedirectResponse("/usuarios", status_code=303)
+
+
+
+# --- Empresas (pessoa jurídica) e estabelecimentos -----------------------------------------------------------------
+
+def _notas_completas(s) -> dict[int, int]:
+    return dict(s.execute(select(models.DocumentoFiscal.empresa_id, func.count())
+                          .where(models.DocumentoFiscal.situacao == "completo")
+                          .group_by(models.DocumentoFiscal.empresa_id)).all())
+
 
 @app.get("/", response_class=HTMLResponse)
 def inicio(request: Request):
+    """As empresas que o usuário vê — uma linha por pessoa jurídica; os estabelecimentos ficam dentro dela."""
+    u = _usuario(request)
     with db.sessao() as s:
-        contagem = dict(s.execute(select(models.DocumentoFiscal.empresa_id, func.count())
-                                  .where(models.DocumentoFiscal.situacao == "completo")
-                                  .group_by(models.DocumentoFiscal.empresa_id)).all())
-        empresas = list(s.scalars(select(models.Empresa).order_by(models.Empresa.nome)))
-        linhas = [{"e": e, "notas": contagem.get(e.id, 0), "cert": e.certificado} for e in empresas]
-    por_raiz: dict[str, list[dict]] = {}
-    for linha in linhas:
-        por_raiz.setdefault(servicos.raiz_cnpj(linha["e"].cnpj), []).append(linha)
-    grupos = sorted(({"raiz": raiz, "nome": min(ls, key=lambda x: x["e"].cnpj[8:12])["e"].nome,  # nome da matriz
-                      "linhas": ls, "varios": len(ls) > 1} for raiz, ls in por_raiz.items()),
-                    key=lambda g: g["nome"])
-    return _render(request, "inicio.html", empresas=linhas, grupos=grupos, calc=calculadora.identificacao(),
+        notas = _notas_completas(s)
+        empresas = [{**x, "estabelecimentos": len(x["empresas"]), "notas": sum(notas.get(e.id, 0) for e in x["empresas"]),
+                     "certificado": any(e.certificado for e in x["empresas"])} for x in _empresas_visiveis(s, u)]
+    return _render(request, "inicio.html", empresas=empresas, calc=calculadora.identificacao() if u.admin else None,
                    calc_local=settings.calculadora_url.startswith("http://localhost"))
 
 
+@app.get("/municipios")
+def municipios(uf: str):
+    """Municípios da UF (base oficial da calculadora), para o campo de município dos cadastros."""
+    try:
+        return JSONResponse(calculadora.municipios(uf))
+    except (CalculadoraIndisponivel, ErroCalculadora) as erro:
+        raise HTTPException(503, str(erro)) from erro
+
+
+def _novo_estabelecimento(s, cnpj: str, nome: str, regime: str, uf: str, municipio: str,
+                          industria: bool) -> models.Empresa:
+    cnpj = servicos.so_digitos(cnpj)
+    if not _cnpj_valido(cnpj):
+        raise ValueError("CNPJ inválido: confira os 14 dígitos.")
+    if not municipio.strip().isdigit():
+        raise ValueError("Escolha o município.")
+    return servicos.criar_empresa(s, cnpj, nome.strip(), regime, uf, int(municipio), industria)
+
+
+@app.get("/empresas/nova", response_class=HTMLResponse)
+def tela_nova_empresa(request: Request, uf: str = "MG"):
+    _exigir(request, "admin", "gestor")
+    return _render(request, "empresa_nova.html", aba="nova", erro="", dados={"uf": uf}, **_locais(uf))
+
+
 @app.post("/empresas")
-def criar_empresa(cnpj: str = Form(...), nome: str = Form(""), regime: str = Form(...), uf: str = Form(...),
-                  municipio: int = Form(...), industria: bool = Form(False)):
+def criar_empresa(request: Request, cnpj: str = Form(...), nome: str = Form(...), regime: str = Form(...),
+                  uf: str = Form(...), municipio: str = Form(""), industria: bool = Form(False)):
+    """Cadastra a empresa pelo estabelecimento matriz. O gestor que cadastra passa a ver a empresa."""
+    u = _exigir(request, "admin", "gestor")
+    raiz = servicos.raiz_cnpj(cnpj)
     try:
         with db.sessao() as s:
-            e = servicos.criar_empresa(s, cnpj, nome, regime, uf, municipio, industria)
-            return _ir(e.id)
+            if servicos.estabelecimentos_da_raiz(s, raiz):
+                raise ValueError("Esta empresa (raiz do CNPJ) já está cadastrada: inclua o estabelecimento dentro dela.")
+            _novo_estabelecimento(s, cnpj, nome, regime, uf, municipio, industria)
+            if not u.admin:
+                s.add(models.AcessoEmpresa(usuario_id=u.id, raiz=raiz))
     except ValueError as erro:
-        raise HTTPException(422, str(erro))
+        dados = {"cnpj": cnpj, "nome": nome, "regime": regime, "uf": uf, "municipio": municipio, "industria": industria}
+        return _render(request, "empresa_nova.html", aba="nova", erro=str(erro), dados=dados, **_locais(uf))
+    AVISOS.setdefault(f"grupo:{raiz}", []).append("Empresa cadastrada. Inclua as filiais abaixo e importe as notas em "
+                                                  "cada estabelecimento.")
+    return RedirectResponse(f"/grupos/{raiz}", status_code=303)
+
+
+@app.get("/grupos/{raiz}", response_class=HTMLResponse)
+def tela_empresa_consolidada(request: Request, raiz: str):
+    """Visão geral da empresa: dados, estabelecimentos (matriz e filiais), inclusão de filial e quem tem acesso."""
+    u = _usuario(request)
+    with db.sessao() as s:
+        empresas = servicos.estabelecimentos_da_raiz(s, raiz)
+        if not empresas:
+            raise HTTPException(404, "Empresa não encontrada")
+        notas = _notas_completas(s)
+        nomes = _nomes_municipios(empresas)
+        linhas = [{"e": e, "notas": notas.get(e.id, 0), "cert": e.certificado, "municipio": nomes.get(e.cod_municipio)}
+                  for e in empresas]
+        usuarios = []
+        if u.pode_editar:
+            usuarios = list(s.scalars(select(models.Usuario).where(models.Usuario.papel == "admin")
+                                      .order_by(models.Usuario.nome)))
+            usuarios += list(s.scalars(select(models.Usuario).join(models.AcessoEmpresa)
+                                       .where(models.AcessoEmpresa.raiz == raiz).order_by(models.Usuario.nome)))
+        g = _Grupo(empresas)
+        return _render(request, "grupo.html", e=g, grupo=g, base=f"/grupos/{raiz}", aba="empresa", linhas=linhas,
+                       usuarios=usuarios, papeis=auth.PAPEIS, erro="", dados={"uf": g.uf}, **_locais(g.uf),
+                       avisos=AVISOS.pop(f"grupo:{raiz}", []))
+
+
+@app.post("/grupos/{raiz}/dados")
+def salvar_dados_empresa(raiz: str, regime: str = Form(...)):
+    """Regime de apuração é da pessoa jurídica: vale para todos os estabelecimentos."""
+    if regime not in ("real", "presumido", "simples"):
+        raise HTTPException(422, "Regime inválido")
+    with db.sessao() as s:
+        for e in servicos.estabelecimentos_da_raiz(s, raiz):
+            e.regime = regime
+    AVISOS.setdefault(f"grupo:{raiz}", []).append("Regime atualizado em todos os estabelecimentos.")
+    return RedirectResponse(f"/grupos/{raiz}", status_code=303)
+
+
+@app.post("/grupos/{raiz}/estabelecimentos")
+def incluir_estabelecimento(request: Request, raiz: str, cnpj: str = Form(...), nome: str = Form(...),
+                            uf: str = Form(...), municipio: str = Form(""), industria: bool = Form(False)):
+    with db.sessao() as s:
+        empresas = servicos.estabelecimentos_da_raiz(s, raiz)
+        if not empresas:
+            raise HTTPException(404, "Empresa não encontrada")
+        try:
+            if servicos.raiz_cnpj(cnpj) != raiz:
+                raise ValueError(f"O CNPJ do estabelecimento precisa começar com a raiz da empresa ({raiz}).")
+            e = _novo_estabelecimento(s, cnpj, nome, empresas[0].regime, uf, municipio, industria)
+        except ValueError as erro:
+            AVISOS.setdefault(f"grupo:{raiz}", []).append(f"Estabelecimento não incluído: {erro}")
+            return RedirectResponse(f"/grupos/{raiz}#incluir", status_code=303)
+        AVISOS.setdefault(f"grupo:{raiz}", []).append(f"Estabelecimento {e.nome} incluído.")
+    return RedirectResponse(f"/grupos/{raiz}", status_code=303)
 
 
 @app.get("/empresas/{empresa_id}", response_class=HTMLResponse)
@@ -194,22 +608,24 @@ def empresa(request: Request, empresa_id: int):
         cob = cobertura.levantar(s, [e])[0]
         return _render(request, "empresa.html", e=e, premissas=servicos.premissas_da_empresa(e),
                        situacoes=situacoes, por_origem=por_origem, cobertura=cob,
-                       alertas_cobertura=cobertura.alertas([cob]), avisos=AVISOS.pop(e.id, []), aba="geral")
+                       alertas_cobertura=cobertura.alertas([cob]), avisos=AVISOS.pop(e.id, []), aba="geral",
+                       **_locais(e.uf))
 
 
 @app.post("/empresas/{empresa_id}/dados")
-def salvar_dados(empresa_id: int, regime: str = Form(...), uf: str = Form(...), municipio: int = Form(...),
+def salvar_dados(empresa_id: int, nome: str = Form(""), uf: str = Form(...), municipio: int = Form(...),
                  industria: bool = Form(False), manifestar_ciencia: bool = Form(False), ambiente_dfe: int = Form(1),
                  cbs_referencia: str = Form(""), ibs_uf_referencia: str = Form(""), ibs_mun_referencia: str = Form(""),
                  credito_fornecedor_simples_pct: str = Form(""), credito_fornecedor_mei_pct: str = Form(""),
                  credito_presumido_nao_contribuinte_pct: str = Form(""), repasse_is_revendedor_pct: str = Form(""),
                  aliquota_das_pct: str = Form(""), das_pis_cofins_pct: str = Form(""),
                  das_icms_iss_pct: str = Form("")):
-    if regime not in ("real", "presumido", "simples") or ambiente_dfe not in (1, 2):
-        raise HTTPException(422, "Regime ou ambiente inválido")
+    if ambiente_dfe not in (1, 2):
+        raise HTTPException(422, "Ambiente inválido")
     with db.sessao() as s:
-        e = _carregar(s, empresa_id)
-        e.regime, e.uf, e.cod_municipio, e.industria = regime, uf.upper(), municipio, industria
+        e = _carregar(s, empresa_id)            # o regime é da empresa: muda na visão geral, para todos
+        e.nome = nome.strip() or e.nome
+        e.uf, e.cod_municipio, e.industria = uf.upper(), municipio, industria
         e.manifestar_ciencia, e.ambiente_dfe = manifestar_ciencia, ambiente_dfe
         try:
             servicos.atualizar_premissas(e, dict(
@@ -515,9 +931,9 @@ def _trava(chave: tuple) -> threading.Lock:
 
 def _assinatura_das_notas(s, e: models.Empresa) -> tuple:
     """Muda quando entram notas, NFC-e consolidadas ou SPED, ou quando muda a calculadora ou a sua base de regras."""
-    docs = s.execute(select(func.count(), func.max(models.DocumentoFiscal.id),
-                            func.sum(case((models.DocumentoFiscal.situacao == "completo", 1), else_=0)))
-                     .where(models.DocumentoFiscal.empresa_id == e.id)).one()
+    D = models.DocumentoFiscal
+    docs = (*s.execute(select(func.count(), func.max(D.id)).where(D.empresa_id == e.id)).one(),
+            s.scalar(select(func.count()).where(D.empresa_id == e.id, D.situacao == "completo")))
     nfce = s.execute(select(func.count(), func.max(models.ConsolidadoNFCe.atualizado_em), func.sum(
         models.ConsolidadoNFCe.cupons)).where(models.ConsolidadoNFCe.empresa_id == e.id)).one()
     sped = s.execute(select(func.count(), func.max(models.EscrituracaoArquivo.importado_em))
@@ -563,6 +979,39 @@ def _ano(ano: int | None, a) -> int:
     return ano if ano in a.premissas.anos else a.premissas.anos[0]
 
 
+# Compras por fornecedor x produto de cada análise e ano: listas, pauta e Excel reaproveitam a mesma (no grupo, montar
+# a lista percorre centenas de milhares de itens).
+_CACHE_COMPRAS: OrderedDict[tuple, tuple] = OrderedDict()
+_MAX_COMPRAS_EM_CACHE = 16
+
+
+def _compras_do_ano(a, ano: int) -> list:
+    chave = (id(a), ano)
+    with _TRAVA_CACHE:
+        guardado = _CACHE_COMPRAS.get(chave)
+        if guardado and guardado[0] is a:
+            _CACHE_COMPRAS.move_to_end(chave)
+            return guardado[1]
+    lista = negociacao.compras(a, ano)
+    with _TRAVA_CACHE:
+        _CACHE_COMPRAS[chave] = (a, lista)
+        while len(_CACHE_COMPRAS) > _MAX_COMPRAS_EM_CACHE:
+            _CACHE_COMPRAS.popitem(last=False)
+    return lista
+
+
+def _meses_de_compra(a) -> int:
+    chave = (id(a), "meses")
+    with _TRAVA_CACHE:
+        guardado = _CACHE_COMPRAS.get(chave)
+        if guardado and guardado[0] is a:
+            return guardado[1]
+    meses = negociacao.meses_de_compra(a)
+    with _TRAVA_CACHE:
+        _CACHE_COMPRAS[chave] = (a, meses)
+    return meses
+
+
 # --- Visão consolidada da pessoa jurídica (raiz do CNPJ) -----------------------------------------------------------
 
 class _Grupo:
@@ -574,7 +1023,7 @@ class _Grupo:
         self.raiz = servicos.raiz_cnpj(matriz.cnpj)
         self.nome, self.regime, self.uf = matriz.nome, matriz.regime, matriz.uf
         self.estabelecimentos = empresas
-        self.cnpj = f"raiz {self.raiz} · {len(empresas)} estabelecimentos"
+        self.cnpj = f"raiz {self.raiz} · {len(empresas)} estabelecimento{'s' if len(empresas) > 1 else ''}"
 
 
 def _analise_grupo(raiz: str, inicio: date | None, fim: date | None):
@@ -607,34 +1056,38 @@ def _analise_grupo_sem_tratamento(raiz: str, inicio: date | None, fim: date | No
 # --- Fornecedores e produtos (negociação) --------------------------------------------------------------------------
 
 def _pagina_fornecedores(request: Request, e, a, base: str, ano: int | None, inicio: str | None, fim: str | None,
-                         regime: str, **extra):
-    """Corpo comum da tela de fornecedores: `e` é a empresa ou a fachada do grupo e `base` o prefixo dos links."""
+                         regime: str, por_cnpj: bool = False, **extra):
+    """Corpo comum da tela de fornecedores: `e` é a empresa ou a fachada do grupo e `base` o prefixo dos links.
+    Por padrão, as filiais do mesmo fornecedor (raiz do CNPJ) aparecem juntas — é com a empresa que se negocia."""
     ano = _ano(ano, a)
-    lista = negociacao.fornecedores(negociacao.compras(a, ano))
+    lista = negociacao.fornecedores(_compras_do_ano(a, ano), por_raiz=not por_cnpj)
     if regime:
         lista = [f for f in lista if f.regime == regime]
+    meses = _meses_de_compra(a)
     return _render(request, "fornecedores.html", e=e, base=base, a=a, aba="fornecedores", ano=ano, fornecedores=lista,
-                   inicio=inicio or "", fim=fim or "", regime=regime,
+                   inicio=inicio or "", fim=fim or "", regime=regime, meses=meses, fator_ano=Decimal(12) / meses,
+                   por_cnpj=por_cnpj,
                    total_atual=sum((f.custo_atual for f in lista), negociacao.ZERO),
                    total_ano=sum((f.custo_precos_hoje for f in lista), negociacao.ZERO), **extra)
 
 
 @app.get("/empresas/{empresa_id}/fornecedores", response_class=HTMLResponse)
 async def tela_fornecedores(request: Request, empresa_id: int, ano: int | None = None, inicio: str | None = None,
-                            fim: str | None = None, regime: str = ""):
+                            fim: str | None = None, regime: str = "", por_cnpj: bool = False):
     di, df = _periodo(inicio, fim)
     e, a = await run_in_threadpool(_analise, empresa_id, di, df)
-    return _pagina_fornecedores(request, e, a, f"/empresas/{empresa_id}", ano, inicio, fim, regime)
+    return _pagina_fornecedores(request, e, a, f"/empresas/{empresa_id}", ano, inicio, fim, regime, por_cnpj)
 
 
 def _pagina_fornecedor(request: Request, e, a, base: str, cnpj: str, ano: int | None, inicio: str | None,
                        fim: str | None, **extra):
     ano = _ano(ano, a)
-    todas = negociacao.compras(a, ano)
-    do_fornecedor = sorted((c for c in todas if c.fornecedor == cnpj), key=lambda c: -c.variacao_custo)
+    todas = _compras_do_ano(a, ano)
+    do_fornecedor = sorted((c for c in todas if negociacao.do_fornecedor(cnpj, c.fornecedor)),
+                           key=lambda c: -c.variacao_custo)
     if not do_fornecedor:
         raise HTTPException(404, "Fornecedor sem compras no período")
-    resumo = negociacao.fornecedores(do_fornecedor)[0]
+    resumo = negociacao.fornecedores(do_fornecedor, por_raiz=True)[0]
     return _render(request, "fornecedor.html", e=e, base=base, a=a, aba="fornecedores", ano=ano, f=resumo,
                    compras=do_fornecedor, inicio=inicio or "", fim=fim or "", **extra)
 
@@ -647,10 +1100,57 @@ async def tela_fornecedor(request: Request, empresa_id: int, cnpj: str, ano: int
     return _pagina_fornecedor(request, e, a, f"/empresas/{empresa_id}", cnpj, ano, inicio, fim)
 
 
+def _pauta(a, cnpj: str, ano: int | None):
+    """Dados da pauta de negociação de um fornecedor: resumo no ano, compras dele (maior volume primeiro), metas de
+    cada ano da transição e o fator que leva o período a valores por ano."""
+    ano = _ano(ano, a)
+    do_fornecedor = sorted((c for c in _compras_do_ano(a, ano) if negociacao.do_fornecedor(cnpj, c.fornecedor)),
+                           key=lambda c: -c.preco_nota_atual)
+    if not do_fornecedor:
+        raise HTTPException(404, "Fornecedor sem compras no período")
+    meses = _meses_de_compra(a)
+    fator = Decimal(12) / meses
+    return {"ano": ano, "f": negociacao.fornecedores(do_fornecedor, por_raiz=True)[0], "compras": do_fornecedor,
+            "meses": meses,
+            "fator_ano": fator, "metas": negociacao.metas_por_ano(a, cnpj, fator)}
+
+
+def _pagina_pauta(request: Request, e, a, base: str, cnpj: str, ano: int | None, inicio: str | None,
+                  fim: str | None, **extra):
+    return _render(request, "pauta.html", e=e, base=base, a=a, aba="fornecedores", inicio=inicio or "", fim=fim or "",
+                   aliquotas=a.aliquotas_usadas, transicao=TRANSICAO,
+                   creditos_sped=any("vêm do SPED" in t for t in a.alertas), **_pauta(a, cnpj, ano), **extra)
+
+
+def _excel_pauta(a, cnpj: str, ano: int | None) -> Response:
+    p = _pauta(a, cnpj, ano)
+    buffer = io.BytesIO()
+    exportar_pauta(p["f"], p["compras"], p["metas"], p["ano"], p["fator_ano"], p["meses"], a.periodo, buffer)
+    return Response(buffer.getvalue(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="pauta_{cnpj}_{p["ano"]}.xlsx"'})
+
+
+@app.get("/empresas/{empresa_id}/fornecedores/{cnpj}/pauta", response_class=HTMLResponse)
+async def tela_pauta(request: Request, empresa_id: int, cnpj: str, ano: int | None = None, inicio: str | None = None,
+                     fim: str | None = None):
+    di, df = _periodo(inicio, fim)
+    e, a = await run_in_threadpool(_analise, empresa_id, di, df)
+    return await run_in_threadpool(_pagina_pauta, request, e, a, f"/empresas/{empresa_id}", cnpj, ano, inicio, fim)
+
+
+@app.get("/empresas/{empresa_id}/fornecedores/{cnpj}/pauta.xlsx")
+async def excel_pauta(empresa_id: int, cnpj: str, ano: int | None = None, inicio: str | None = None,
+                      fim: str | None = None):
+    di, df = _periodo(inicio, fim)
+    _, a = await run_in_threadpool(_analise, empresa_id, di, df)
+    return await run_in_threadpool(_excel_pauta, a, cnpj, ano)
+
+
 def _pagina_produtos(request: Request, e, a, base: str, ano: int | None, inicio: str | None, fim: str | None,
                      q: str = "", multi: bool = False, pagina: int = 1, **extra):
     ano = _ano(ano, a)
-    lista = negociacao.produtos(a, negociacao.compras(a, ano), ano)
+    lista = negociacao.produtos(a, _compras_do_ano(a, ano), ano)
     busca = q.strip().lower()
     pag = _paginar([p for p in lista if (not multi or (p.fornecedores or 0) > 1)
                     and _bate_busca(busca, p.gtin, *p.codigos, p.descricao, p.ncm)], pagina)
@@ -671,7 +1171,7 @@ async def tela_produtos(request: Request, empresa_id: int, ano: int | None = Non
 def _pagina_produto(request: Request, e, a, base: str, chave: str, ano: int | None, inicio: str | None,
                     fim: str | None, **extra):
     ano = _ano(ano, a)
-    produto = next((p for p in negociacao.produtos(a, negociacao.compras(a, ano), ano) if p.chave == chave), None)
+    produto = next((p for p in negociacao.produtos(a, _compras_do_ano(a, ano), ano) if p.chave == chave), None)
     if not produto:
         raise HTTPException(404, "Produto sem movimento no período")
     compras = sorted(produto.compras, key=lambda c: (c.unidade, c.custo_unit_precos_hoje or 0))
@@ -690,7 +1190,7 @@ async def tela_produto(request: Request, empresa_id: int, chave: str, ano: int |
 
 def _excel_negociacao(a, ano: int, nome_arquivo: str) -> Response:
     buffer = io.BytesIO()
-    exportar_negociacao(negociacao.compras(a, ano), ano, buffer)
+    exportar_negociacao(_compras_do_ano(a, ano), ano, buffer)
     return Response(buffer.getvalue(),
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'})
@@ -760,10 +1260,10 @@ async def baixar_excel_grupo(raiz: str, inicio: str | None = None, fim: str | No
 
 @app.get("/grupos/{raiz}/fornecedores", response_class=HTMLResponse)
 async def tela_fornecedores_grupo(request: Request, raiz: str, ano: int | None = None, inicio: str | None = None,
-                                  fim: str | None = None, regime: str = ""):
+                                  fim: str | None = None, regime: str = "", por_cnpj: bool = False):
     di, df = _periodo(inicio, fim)
     g, a = await run_in_threadpool(_analise_grupo, raiz, di, df)
-    return _pagina_fornecedores(request, g, a, f"/grupos/{raiz}", ano, inicio, fim, regime, grupo=g)
+    return _pagina_fornecedores(request, g, a, f"/grupos/{raiz}", ano, inicio, fim, regime, por_cnpj, grupo=g)
 
 
 @app.get("/grupos/{raiz}/fornecedores/{cnpj}", response_class=HTMLResponse)
@@ -772,6 +1272,22 @@ async def tela_fornecedor_grupo(request: Request, raiz: str, cnpj: str, ano: int
     di, df = _periodo(inicio, fim)
     g, a = await run_in_threadpool(_analise_grupo, raiz, di, df)
     return _pagina_fornecedor(request, g, a, f"/grupos/{raiz}", cnpj, ano, inicio, fim, grupo=g)
+
+
+@app.get("/grupos/{raiz}/fornecedores/{cnpj}/pauta", response_class=HTMLResponse)
+async def tela_pauta_grupo(request: Request, raiz: str, cnpj: str, ano: int | None = None, inicio: str | None = None,
+                           fim: str | None = None):
+    di, df = _periodo(inicio, fim)
+    g, a = await run_in_threadpool(_analise_grupo, raiz, di, df)
+    return await run_in_threadpool(_pagina_pauta, request, g, a, f"/grupos/{raiz}", cnpj, ano, inicio, fim, grupo=g)
+
+
+@app.get("/grupos/{raiz}/fornecedores/{cnpj}/pauta.xlsx")
+async def excel_pauta_grupo(raiz: str, cnpj: str, ano: int | None = None, inicio: str | None = None,
+                            fim: str | None = None):
+    di, df = _periodo(inicio, fim)
+    _, a = await run_in_threadpool(_analise_grupo, raiz, di, df)
+    return await run_in_threadpool(_excel_pauta, a, cnpj, ano)
 
 
 @app.get("/grupos/{raiz}/produtos", response_class=HTMLResponse)

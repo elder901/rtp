@@ -1,5 +1,27 @@
 {% extends "base.html" %}
+{% set nomes_regime = {'real': 'Lucro Real', 'presumido': 'Lucro Presumido', 'simples': 'Simples Nacional'} %}
 {% block conteudo %}
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap">
+    <h1 style="margin:0">Empresas</h1>
+    {% if usuario.pode_editar %}<a class="botao" href="/empresas/nova">+ Nova empresa</a>{% endif %}
+  </div>
+  {% if empresas %}
+  <div class="tabela" style="margin-top:12px"><table>
+    <tr><th class="txt">Empresa</th><th class="txt">CNPJ (raiz)</th><th class="txt">Regime</th><th class="txt">UF</th>
+        <th>Estabelecimentos</th><th>NF-e completas</th><th class="txt">Certificado A1</th></tr>
+    {% for x in empresas %}
+    <tr><td class="txt"><a href="/grupos/{{ x.raiz }}"><b>{{ x.nome }}</b></a></td>
+      <td class="txt" style="font-family:monospace">{{ x.raiz[:2] }}.{{ x.raiz[2:5] }}.{{ x.raiz[5:] }}</td>
+      <td class="txt">{{ nomes_regime[x.regime] }}</td><td class="txt">{{ x.uf }}</td>
+      <td>{{ x.estabelecimentos }}</td><td>{{ x.notas }}</td><td class="txt">{{ 'sim' if x.certificado else '—' }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% elif usuario.pode_editar %}<p class="suave">Nenhuma empresa cadastrada. Comece por <a href="/empresas/nova">Nova empresa</a>.</p>
+  {% else %}<p class="suave">Nenhuma empresa liberada para o seu usuário. Peça acesso ao gestor da empresa.</p>{% endif %}
+</div>
+
+{% if calc %}
 <div class="card">
   <h2>Calculadora RTC em uso</h2>
   {% if calc.erro %}
@@ -11,42 +33,5 @@
   {% if not calc_local %}<p class="suave">Para não enviar consultas à instância pública, instale a calculadora local:
     <code>python -m app.cli calculadora atualizar</code> e defina <code>RTP_CALCULADORA_URL=http://localhost:8080/api</code>.</p>{% endif %}
 </div>
-
-<div class="card">
-  <h1>Empresas</h1>
-  {% if empresas %}
-  <div class="tabela"><table>
-    <tr><th class="txt">Empresa</th><th class="txt">CNPJ</th><th class="txt">Regime</th><th class="txt">UF</th>
-        <th>NF-e completas</th><th class="txt">Certificado A1</th></tr>
-    {% for g in grupos %}
-    {% if g.varios %}{# pessoa jurídica com mais de um estabelecimento: cabeçalho com a visão consolidada #}
-    <tr><td colspan="6" class="txt"><b>{{ g.nome }}</b> <span class="tag">{{ g.linhas|length }} estabelecimentos</span>
-        · <a href="/grupos/{{ g.raiz }}/analise">Análise consolidada</a></td></tr>
-    {% endif %}
-    {% for l in g.linhas %}
-    <tr><td><a href="/empresas/{{ l.e.id }}">{{ l.e.nome }}</a></td><td class="txt">{{ l.e.cnpj }}</td>
-        <td class="txt">{{ l.e.regime }}</td><td class="txt">{{ l.e.uf }}</td><td>{{ l.notas }}</td>
-        <td class="txt">{{ ('até ' ~ l.cert.validade.strftime('%d/%m/%Y')) if l.cert else '—' }}</td></tr>
-    {% endfor %}
-    {% endfor %}
-  </table></div>
-  {% else %}<p class="suave">Nenhuma empresa cadastrada.</p>{% endif %}
-</div>
-
-<div class="card">
-  <h2>Nova empresa</h2>
-  <form method="post" action="/empresas">
-    <div class="grade">
-      <div><label>CNPJ</label><input name="cnpj" required></div>
-      <div><label>Nome</label><input name="nome"></div>
-      <div><label>Regime atual</label>
-        <select name="regime"><option value="real">Lucro Real</option><option value="presumido">Lucro Presumido</option>
-          <option value="simples">Simples Nacional</option></select></div>
-      <div><label>UF</label><input name="uf" maxlength="2" required></div>
-      <div><label>Município (código IBGE)</label><input name="municipio" type="number" required></div>
-      <div><label class="check" style="margin-top:28px"><input type="checkbox" name="industria" value="true"> Indústria (credita IPI)</label></div>
-    </div>
-    <div class="acoes"><button type="submit">Cadastrar</button></div>
-  </form>
-</div>
+{% endif %}
 {% endblock %}

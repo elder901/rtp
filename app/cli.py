@@ -2,6 +2,9 @@
 
   python -m app.cli empresa criar --cnpj 11222333000181 --nome "Loja" --regime real --uf SP --municipio 3550308
   python -m app.cli empresa listar
+  python -m app.cli usuarios criar --email admin@empresa.com.br --nome "Fulana" --papel admin   (senha pedida no terminal)
+  python -m app.cli usuarios criar --email comprador@cliente.com.br --nome "Ciclano" --papel consulta --empresas 25735465
+  python -m app.cli usuarios senha --email comprador@cliente.com.br      |      python -m app.cli usuarios listar
   python -m app.cli importar --cnpj 11222333000181 --xml C:/xmls/cliente
   python -m app.cli importar-flex --cnpj 11222333000181 --csv C:/xmlnfe.csv --inicio 2022-12-01 --fim 2022-12-31
   python -m app.cli importar-banco --cnpj 11222333000181 --inicio 2026-01 --fim 2026-09 [--unidade 001]
@@ -381,6 +384,36 @@ def _exportar_conciliacao(conc, destino: Path):
     wb.save(destino)
 
 
+def cmd_usuarios(a):
+    from app import auth
+
+    with db.sessao() as s:
+        if a.acao == "listar":
+            for u in s.scalars(select(models.Usuario).order_by(models.Usuario.nome)):
+                empresas = "todas" if u.papel == "admin" else ", ".join(sorted(x.raiz for x in u.acessos)) or "nenhuma"
+                print(f"{u.email:35s} {u.nome:30s} {auth.PAPEIS[u.papel]:13s} {'ativo' if u.ativo else 'desativado':10s} "
+                      f"{empresas}")
+            return
+        if not a.email:
+            raise SystemExit("Informe --email.")
+        senha = os.getenv(a.senha_env) if a.senha_env else getpass.getpass("Senha (mínimo 8): ")
+        if not a.senha_env and senha != getpass.getpass("Confirme a senha: "):
+            raise SystemExit("A confirmação não confere.")
+        try:
+            if a.acao == "criar":
+                u = auth.criar_usuario(s, a.nome or a.email, a.email, senha, a.papel,
+                                       a.empresas.split(",") if a.empresas else [])
+                print(f"Usuário {u.email} criado ({auth.PAPEIS[u.papel]}).")
+            else:
+                u = s.scalar(select(models.Usuario).where(models.Usuario.email == a.email.strip().lower()))
+                if u is None:
+                    raise SystemExit(f"Usuário {a.email} não encontrado.")
+                auth.trocar_senha(s, u, senha)
+                print(f"Senha de {u.email} redefinida; sessões abertas encerradas.")
+        except ValueError as erro:
+            raise SystemExit(str(erro)) from erro
+
+
 def cmd_calculadora(a):
     from app.calculadora import offline
 
@@ -535,6 +568,15 @@ def main(argv: list[str] | None = None):
     pp.add_argument("--pa-fim", help="AAAA-MM")
     pp.add_argument("--saida", type=Path)
     pp.set_defaults(func=cmd_apuracao)
+
+    pu = sub.add_parser("usuarios", help="usuários da interface web: listar, criar, redefinir senha")
+    pu.add_argument("acao", choices=["listar", "criar", "senha"])
+    pu.add_argument("--email")
+    pu.add_argument("--nome", default="")
+    pu.add_argument("--papel", choices=["admin", "gestor", "consulta"], default="consulta")
+    pu.add_argument("--empresas", default="", help="raízes de CNPJ (8 dígitos) separadas por vírgula")
+    pu.add_argument("--senha-env", help="variável de ambiente com a senha (sem perguntar no terminal)")
+    pu.set_defaults(func=cmd_usuarios)
 
     pk = sub.add_parser("calculadora", help="calculadora RTC local: status, atualizar, iniciar, parar")
     pk.add_argument("acao", choices=["status", "atualizar", "iniciar", "parar", "fonte", "executar"])

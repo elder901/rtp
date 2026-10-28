@@ -187,3 +187,63 @@ def test_visao_do_grupo_inclui_as_notas_das_filiais():
     da_filial_no_grupo = [r for r in grupo.itens if r.documento.chave == "9" * 44]
     assert da_filial_no_grupo and all(r.direcao == "saida" for r in da_filial_no_grupo)
     assert len(grupo.itens) == len(so_matriz.itens) + len(da_filial_no_grupo)
+
+
+def test_devolucao_fica_fora_e_o_alerta_mostra_o_peso_sobre_as_compras():
+    from dataclasses import replace
+
+    docs = ler_caminho(FX).documentos
+    compra = next(d for d in docs if any(i.codigo == "NB-01" for i in d.itens))
+    nb01 = next(i for i in compra.itens if i.codigo == "NB-01")
+    devolucao = replace(compra, chave="8" * 44, emitente=compra.destinatario, destinatario=compra.emitente,
+                        itens=[replace(nb01, cfop="5202")])          # a loja devolve o NB-01 ao fornecedor
+    empresa = Empresa("11222333000181", "LOJA TESTE", "real", "SP", 3550308)
+    sem = analisar(empresa, docs, Premissas(anos=[2027]), CalculadoraFake())
+    com = analisar(empresa, [*docs, devolucao], Premissas(anos=[2027]), CalculadoraFake())
+    assert not any(r.documento.chave == "8" * 44 for r in com.itens)
+    assert not any(t.startswith("Devoluções") for t in sem.alertas)
+    compras = sum(r.item.valor_operacao for r in com.itens if r.direcao == "entrada")
+    pct = f"{nb01.valor_operacao / compras * 100:.1f}".replace(".", ",")
+    aviso = next(t for t in com.alertas if t.startswith("Devoluções"))
+    assert aviso.startswith(f"Devoluções de compra R$ 1.000,00 ({pct}% das compras) não foram abatidas.")
+    assert "Passam de 2%" in aviso
+
+
+def test_fornecedor_que_declara_tributacao_integral_cede_ao_anexo_do_ncm():
+    """Ovos, arroz...: 000001 no XML do fornecedor costuma ser o padrão do ERP, não uma classificação."""
+    xml = (FX / "entrada_fornecedor_normal.xml").read_text(encoding="utf-8").replace(
+        "<CST>200</CST><cClassTrib>200003</cClassTrib>", "<CST>000</CST><cClassTrib>000001</cClassTrib>")
+    a = analisar(Empresa("11222333000181", "LOJA", "real", "SP", 3550308), [ler_nfe(xml.encode())],
+                 Premissas(anos=[2033]), CalculadoraFake())
+    arroz, nb = _item(a, "ARZ-5"), _item(a, "NB-01")
+    assert (arroz.classificacao.cclasstrib, arroz.classificacao.origem) == ("200003", "anexo")
+    assert (nb.classificacao.cclasstrib, nb.classificacao.origem) == ("000001", "fornecedor")   # NCM fora de anexo
+    assert any(t.startswith("1 produto(s) que o fornecedor declara com tributação integral") for t in a.alertas)
+
+
+def test_anexo_que_vale_so_para_um_produto_exige_a_descricao():
+    """2106.90.90 está no Anexo I só para fórmulas infantis; 1905.90.90 só para o pão francês."""
+    from dataclasses import replace
+
+    from app.engine.cenarios import anexo_do_produto
+
+    class AnexoIAmplo(CalculadoraFake):
+        ANEXOS = {**CalculadoraFake.ANEXOS, "200003": ("1006", "2106", "1905")}
+
+    anexos = {"21069090": ("200", "200003"), "19059090": ("200", "200003")}
+    assert anexo_do_produto("21069090", "Marmitex Tejotao Un", anexos) is None
+    assert anexo_do_produto("21069090", "Fórmula Infantil Nan 800g", anexos) == ("200", "200003")
+    assert anexo_do_produto("19059090", "Pao Frances Kg", anexos) == ("200", "200003")
+    assert anexo_do_produto("19059090", "Cupcake Confeitado Kg", anexos) is None
+
+    docs = ler_caminho(FX).documentos
+    venda = next(d for d in docs if any(i.codigo == "V-NB01" for i in d.itens))
+    marmita = replace(venda, chave="7" * 44, itens=[replace(venda.itens[0], codigo="MARMITA", gtin="",
+                                                            descricao="Marmitex Tejotao Un", ncm="21069090",
+                                                            ibscbs=None)])
+    a = analisar(Empresa("11222333000181", "LOJA", "real", "SP", 3550308), [marmita], Premissas(anos=[2033]),
+                 AnexoIAmplo())
+    r = _item(a, "MARMITA")
+    assert (r.classificacao.cclasstrib, r.classificacao.origem) == ("000001", "padrao")
+    aviso = next(t for t in a.alertas if t.startswith("Produtos com NCM em que o anexo"))
+    assert "NCM 2106.90.90" in aviso and "R$ " in aviso

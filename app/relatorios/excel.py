@@ -92,3 +92,48 @@ def exportar_negociacao(compras, ano: int, destino: Path | BinaryIO) -> Path | B
         destino.parent.mkdir(parents=True, exist_ok=True)
     wb.save(destino)
     return destino
+
+
+def exportar_pauta(f, compras, metas, ano: int, fator_ano: Decimal, meses: int, periodo,
+                   destino: Path | BinaryIO) -> Path | BinaryIO:
+    """Pauta de negociação de um fornecedor: o que pedir no ano, o argumento (tributo destacado hoje que sai do preço),
+    as metas de cada ano da transição e o preço de nota alvo de cada produto. "Por ano" = período x 12 / meses."""
+    inicio, fim = periodo
+    janela = f"{inicio:%d/%m/%Y} a {fim:%d/%m/%Y}" if inicio and fim else "todas as notas"
+    wb = Workbook()
+    wb.remove(wb.active)
+    _aba(wb, "Pauta", [{"item": k, "valor": v} for k, v in (
+        ("Fornecedor", f.nome), ("CNPJ", f.cnpj), ("Regime", f.regime), ("UF", f.uf),
+        ("Período analisado", f"{janela} — {meses} mês(es) com compras; valores por ano = período x 12 / {meses}"),
+        ("Compras por ano, a preço de nota (R$)", f.preco_nota_atual * fator_ano),
+        (f"Meta de preço de nota em {ano} (%) — negativo é desconto a pedir", f.variacao_preco_nota_equilibrio_pct),
+        (f"Em jogo por ano em {ano} se ele mantiver os preços (R$)", f.variacao_custo * fator_ano),
+        ("ICMS próprio no preço de nota de hoje (%)", f.parte(f.icms)),
+        ("ICMS-ST no preço de nota de hoje (%)", f.parte(f.icms_st)),
+        ("IPI no preço de nota de hoje (%)", f.parte(f.ipi)),
+        ("PIS/COFINS no preço de nota de hoje (%)", f.parte(f.pis_cofins)),
+        (f"Tributo destacado hoje que sai do preço em {ano} (%)", f.parte(f.sai_do_preco(ano))),
+        (f"CBS/IBS na compra em {ano} (%) — crédito integral, não é custo", f.parte(f.cbs_ibs_ano)),
+        (f"Imposto Seletivo em {ano} (%) — sem crédito, é custo", f.parte(f.imposto_seletivo_ano)),
+        ("Nosso crédito hoje (%)", f.parte(f.creditos_atual)),
+        (f"Nosso crédito em {ano} (%)", f.parte(f.creditos_ano)),
+        ("Volume com classificação presumida pelo NCM ou sem classificação (%)", f.presumido_pct),
+        ("Volume com tributo pago antes na cadeia, fora da nota (%) — meta é o mínimo", f.imposto_anterior_pct),
+    )])
+    _aba(wb, "Metas por ano", [{
+        "ano": m.ano, "sai_do_preco_de_nota_pct": m.sai_do_preco_pct, "meta_preco_de_nota_pct": m.preco_nota_equilibrio_pct,
+        "em_jogo_por_ano_se_mantiver_precos": m.variacao_custo_por_ano,
+    } for m in metas])
+    _aba(wb, "Produtos", [{
+        "ean": c.gtin, "codigos": ", ".join(c.codigos), "descricao": c.descricao, "ncm": c.ncm,
+        "cclasstrib": c.cclasstrib, "unidade": c.unidade, "quantidade_por_ano": c.quantidade * fator_ano,
+        "compras_por_ano": c.preco_nota_atual * fator_ano, "preco_de_nota_unit_hoje": c.preco_nota_unit,
+        f"meta_preco_de_nota_unit_{ano}": c.preco_nota_equilibrio_unit,
+        "variacao_pct": c.variacao_preco_nota_equilibrio_pct, f"imposto_seletivo_{ano}": c.imposto_seletivo_ano,
+        "melhor_fornecedor_precos_de_hoje": c.melhor.fornecedor_nome if c.melhor and c.melhor is not c else "",
+        f"custo_unit_dele_{ano}": c.melhor.custo_unit_precos_hoje if c.melhor and c.melhor is not c else None,
+    } for c in compras])
+    if isinstance(destino, Path):
+        destino.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(destino)
+    return destino

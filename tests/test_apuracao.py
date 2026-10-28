@@ -13,7 +13,7 @@ from app.apuracao import conciliacao
 from app.apuracao import servico as apuracao
 from app.apuracao.cliente import ClienteApuracao, ErroApuracao, Situacao
 from app.config import settings
-from tests.conftest import CNPJ_EMPRESA, FX, CalculadoraFake
+from tests.conftest import CNPJ_EMPRESA, FX, CalculadoraFake, cliente_logado
 
 PRR = settings.apuracao_url_prr
 CHAVE_ENTRADA = "35261044555666000177550010000012341000012345"   # CBS destacada 6,70
@@ -139,11 +139,9 @@ def test_webhook(empresa, monkeypatch):
         sol = s.scalar(select(models.SolicitacaoApuracao))
         assert (sol.estado, sol.registros) == ("CONCLUIDA", 1)
         assert s.scalar(select(func.count()).select_from(models.RegistroApuracao)) == 1
-    # webhook funciona mesmo com login básico ligado na interface
-    monkeypatch.setattr(main.settings, "usuario", "bix")
-    monkeypatch.setattr(main.settings, "senha", "x")
+    # o webhook não exige login; a interface, sim
     assert c.head(f"/webhooks/apuracao-cbs/{token}").status_code == 200
-    assert c.get("/").status_code == 401
+    assert c.get("/", follow_redirects=False).headers["location"].startswith("/login")
 
 
 def test_verificar_pendentes(empresa, monkeypatch):
@@ -180,7 +178,7 @@ def test_conciliacao(empresa):
 
 def test_tela_e_importacao_web(empresa, monkeypatch):
     monkeypatch.setattr(main, "calculadora", CalculadoraFake())
-    c = TestClient(main.app)
+    c = cliente_logado()
     tela = c.get(f"/empresas/{empresa}/apuracao")
     assert "webhook HTTPS público" in tela.text and "Sem registros da Receita" in tela.text
     corpo = json.dumps(arquivo("creditos", [(CHAVE_ENTRADA, 6.70, 0)])).encode()

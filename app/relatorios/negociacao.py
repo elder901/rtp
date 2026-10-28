@@ -15,14 +15,24 @@ gôndola ou mantendo a margem, com o fornecedor mantendo o preço ou repassando.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
+from functools import cached_property
 
 from app.engine.cenarios import Analise, ResultadoItem, taxa_por_dentro
+from app.engine.premissas import TRANSICAO
 
 ZERO = Decimal("0")
 DUAS = Decimal("0.01")
 QUATRO = Decimal("0.0001")
+# Tributo pago antes na cadeia e que não aparece destacado na nota do fornecedor: PIS/COFINS monofásico ou por
+# substituição na revenda (CST 04, 05) e ICMS-ST retido anteriormente (CST 60, CSOSN 500). Quando ele sai, o custo do
+# fornecedor também cai, e a meta calculada só com o que está na nota fica abaixo do possível.
+PIS_PAGO_ANTES = {"04", "05"}
+ICMS_PAGO_ANTES = {"60", "500"}
+# Margem de hoje (% do valor líquido de venda) que ainda se explica por preço. Fora disso a unidade vendida não é a
+# comprada, ainda que o nome coincida (ex.: o fardo de 18 latas vendido como "UN" com o EAN da lata).
+MARGEM_PLAUSIVEL = (Decimal("-50"), Decimal("70"))
 
 
 def _pct(novo: Decimal | None, antigo: Decimal | None) -> Decimal | None:
@@ -48,6 +58,7 @@ class Compra:
     cclasstrib: str
     unidade: str
     quantidade: Decimal = ZERO
+    quantidade_comercial: Decimal = ZERO      # qCom: caixas, fardos... (quantidade está na unidade do EAN tributável)
     valor_liquido: Decimal = ZERO
     preco_pago: Decimal = ZERO
     creditos_atual: Decimal = ZERO
@@ -61,6 +72,15 @@ class Compra:
     preco_nota_equilibrio: Decimal = ZERO     # preço de nota que mantém o seu custo de hoje
     imposto_seletivo_ano: Decimal = ZERO      # IS cobrado na compra ou embutido no preço do revendedor (sem crédito)
     tratamento_is: str = ""
+    # composição do preço de nota de hoje: o que o fornecedor destaca na nota
+    icms: Decimal = ZERO                      # ICMS próprio + FCP
+    icms_st: Decimal = ZERO                   # ICMS-ST + FCP-ST
+    ipi: Decimal = ZERO
+    pis_cofins: Decimal = ZERO
+    cbs_ibs_ano: Decimal = ZERO               # CBS + IBS na compra no ano analisado (crédito integral)
+    # confiabilidade (em preço de nota de hoje)
+    valor_presumido: Decimal = ZERO           # classificação presumida pelo NCM ou tributação integral por falta dela
+    valor_imposto_anterior: Decimal = ZERO    # com tributo pago antes na cadeia (PIS_PAGO_ANTES, ICMS_PAGO_ANTES)
     notas: set[str] = field(default_factory=set)
     melhor: "Compra | None" = None   # menor custo no ano, a preços de hoje, entre fornecedores do mesmo produto e unidade
 
@@ -137,6 +157,7 @@ def compras(a: Analise, ano: int) -> list[Compra]:
         v, vl = r.anos[ano], i.valor_liquido
         custo_hoje, custo_ano = r.atual.custo_ou_receita(vl), v.custo_ou_receita(vl)
         c.quantidade += qtd
+        c.quantidade_comercial += i.quantidade
         c.valor_liquido += vl
         c.preco_pago += r.atual.preco(vl)
         c.creditos_atual += r.atual.creditos
@@ -147,6 +168,15 @@ def compras(a: Analise, ano: int) -> list[Compra]:
         c.tratamento_is = c.tratamento_is or r.imposto_seletivo
         c.notas.add(r.documento.chave)
         c.preco_nota_atual += i.valor_operacao
+        c.icms += i.v_icms + i.v_fcp
+        c.icms_st += i.v_icms_st + i.v_fcp_st
+        c.ipi += i.v_ipi
+        c.pis_cofins += i.v_pis + i.v_cofins
+        c.cbs_ibs_ano += v.cbs + v.ibs
+        if r.classificacao.origem in ("anexo", "padrao"):
+            c.valor_presumido += i.valor_operacao
+        if i.pis_cst in PIS_PAGO_ANTES or i.icms_cst in ICMS_PAGO_ANTES:
+            c.valor_imposto_anterior += i.valor_operacao
         if vl > 0 and i.valor_operacao:
             fator = custo_ano / vl                     # custo no ano por R$ de valor líquido
             embutido = 1 - taxa_por_dentro(i, ano)     # parte do preço de nota que não é tributo embutido
@@ -189,11 +219,41 @@ class ResumoFornecedor:
     custo_precos_hoje: Decimal
     economia_trocando: Decimal
     produtos_com_alternativa: int
+    icms: Decimal = ZERO
+    icms_st: Decimal = ZERO
+    ipi: Decimal = ZERO
+    pis_cofins: Decimal = ZERO
+    cbs_ibs_ano: Decimal = ZERO
+    imposto_seletivo_ano: Decimal = ZERO
+    creditos_atual: Decimal = ZERO
+    creditos_ano: Decimal = ZERO
+    valor_presumido: Decimal = ZERO
+    valor_imposto_anterior: Decimal = ZERO
+    cnpjs: int = 1                    # agrupado pela raiz: quantos CNPJs (filiais) do fornecedor faturaram
 
     @property
     def variacao_custo(self) -> Decimal:
         """A preços de hoje."""
         return self.custo_precos_hoje - self.custo_atual
+
+    def sai_do_preco(self, ano: int) -> Decimal:
+        """Tributo destacado hoje na nota que deixa de existir no ano (PIS/COFINS e IPI em 2027; o ICMS aos poucos
+        de 2029 a 2033) — o argumento da negociação."""
+        t = TRANSICAO[ano]
+        return (self.pis_cofins * (1 - t.fator_pis_cofins) + self.ipi * (1 - t.fator_ipi)
+                + (self.icms + self.icms_st) * (1 - t.fator_icms_iss))
+
+    def parte(self, valor: Decimal) -> Decimal | None:
+        """`valor` como % do preço de nota de hoje."""
+        return (valor / self.preco_nota_atual * 100).quantize(DUAS) if self.preco_nota_atual else None
+
+    @property
+    def presumido_pct(self) -> Decimal | None:
+        return self.parte(self.valor_presumido)
+
+    @property
+    def imposto_anterior_pct(self) -> Decimal | None:
+        return self.parte(self.valor_imposto_anterior)
 
     @property
     def variacao_custo_pct(self) -> Decimal | None:
@@ -212,23 +272,64 @@ class ResumoFornecedor:
         return _pct(self.custo_atual, self.custo_ano) if self.custo_ano else None
 
 
-def fornecedores(lista: list[Compra]) -> list[ResumoFornecedor]:
+def fornecedores(lista: list[Compra], por_raiz: bool = False) -> list[ResumoFornecedor]:
+    """Resumo por fornecedor. `por_raiz`: junta os CNPJs do mesmo fornecedor (filiais que faturam), que é com quem se
+    negocia; quem fatura por um CNPJ só continua identificado pelo CNPJ completo."""
     grupos: dict[str, list[Compra]] = defaultdict(list)
     for c in lista:
-        grupos[c.fornecedor].append(c)
+        grupos[c.fornecedor[:8] if por_raiz else c.fornecedor].append(c)
     saida = []
-    for cnpj, cs in grupos.items():
-        c0 = cs[0]
+    for chave, cs in grupos.items():
+        c0 = max(cs, key=lambda c: c.preco_nota_atual)   # nome, regime e UF do CNPJ que mais faturou
+        cnpjs = {c.fornecedor for c in cs}
+        cnpj = chave if len(cnpjs) > 1 else c0.fornecedor
 
         def soma(nome):
             return sum((getattr(c, nome) for c in cs), ZERO)
 
         saida.append(ResumoFornecedor(
-            cnpj, c0.fornecedor_nome, c0.regime, c0.uf, len(cs), len(set().union(*(c.notas for c in cs))),
+            cnpj, c0.fornecedor_nome, c0.regime, c0.uf, len({(c.chave, c.unidade) for c in cs}),
+            len(set().union(*(c.notas for c in cs))),
             soma("valor_liquido"), soma("preco_nota_atual"), soma("preco_nota_equilibrio"), soma("custo_atual"),
             soma("custo_ano"), soma("custo_precos_hoje"),
-            sum((c.economia_trocando or ZERO for c in cs), ZERO), sum(1 for c in cs if c.economia_trocando)))
+            sum((c.economia_trocando or ZERO for c in cs), ZERO), sum(1 for c in cs if c.economia_trocando),
+            *(soma(n) for n in ("icms", "icms_st", "ipi", "pis_cofins", "cbs_ibs_ano", "imposto_seletivo_ano",
+                                "creditos_atual", "creditos_ano", "valor_presumido", "valor_imposto_anterior")),
+            cnpjs=len(cnpjs)))
     return sorted(saida, key=lambda f: -f.variacao_custo)
+
+
+def meses_de_compra(a: Analise) -> int:
+    """Meses com compras na análise — base para levar o período a valores por ano."""
+    return len({r.documento.emissao.strftime("%Y-%m") for r in a.itens
+                if r.direcao == "entrada" and r.documento.emissao}) or 1
+
+
+@dataclass
+class MetaAno:
+    ano: int
+    preco_nota_equilibrio_pct: Decimal | None   # negativo: desconto a pedir
+    variacao_custo_por_ano: Decimal             # R$ por ano se o fornecedor mantiver os preços
+    sai_do_preco_pct: Decimal | None            # tributo destacado hoje que deixa de existir no ano
+
+
+def do_fornecedor(cnpj_ou_raiz: str, fornecedor: str) -> bool:
+    """O CNPJ `fornecedor` é o pedido — CNPJ completo ou a raiz (8 dígitos) de um fornecedor com filiais."""
+    return fornecedor.startswith(cnpj_ou_raiz) if len(cnpj_ou_raiz) == 8 else fornecedor == cnpj_ou_raiz
+
+
+def metas_por_ano(a: Analise, cnpj: str, fator_ano: Decimal) -> list[MetaAno]:
+    """A meta de preço de nota do fornecedor em cada ano da transição (só as compras dele). `cnpj`: CNPJ ou raiz."""
+    so_dele = replace(a, itens=[r for r in a.itens
+                                if r.direcao == "entrada" and do_fornecedor(cnpj, r.contraparte.cnpj)])
+    saida = []
+    for ano in a.premissas.anos:
+        resumo = fornecedores(compras(so_dele, ano), por_raiz=True)
+        if resumo:
+            f = resumo[0]
+            saida.append(MetaAno(ano, f.variacao_preco_nota_equilibrio_pct,
+                                 (f.variacao_custo * fator_ano).quantize(DUAS), f.parte(f.sai_do_preco(ano))))
+    return saida
 
 
 @dataclass
@@ -297,10 +398,34 @@ class ResumoProduto:
     def _compras_mesma_unidade(self) -> list[Compra]:
         return [c for c in self.compras if c.unidade == self.unidade_venda and c.quantidade]
 
+    @cached_property
+    def fator_unidade(self) -> Decimal | None:
+        """Unidades de compra em cada unidade vendida: 1; ou a embalagem da nota de compra (qTrib / qCom) quando só
+        ela explica o preço (a loja vende o fardo com o EAN da unidade); None quando nenhuma dá margem plausível."""
+        cs = self._compras_mesma_unidade()
+        qtd, qcom = sum((c.quantidade for c in cs), ZERO), sum((c.quantidade_comercial for c in cs), ZERO)
+        if not qtd or not self.quantidade_venda or not self.vendas_liquidas:
+            return Decimal(1)
+        vl = self.vendas_liquidas / self.quantidade_venda
+        custo = sum((c.custo_atual for c in cs), ZERO) / qtd
+        candidatos = [Decimal(1)]
+        if qcom and qtd / qcom >= Decimal("1.5"):
+            candidatos.append((qtd / qcom).quantize(Decimal(1)))
+        for f in candidatos:
+            if MARGEM_PLAUSIVEL[0] <= (vl - custo * f) / vl * 100 <= MARGEM_PLAUSIVEL[1]:
+                return f
+        return None
+
+    @property
+    def unidades_incompativeis(self) -> bool:
+        return self.fator_unidade is None
+
     def _custo_unit(self, nome: str) -> Decimal | None:
         cs = self._compras_mesma_unidade()
         qtd = sum((c.quantidade for c in cs), ZERO)
-        return _unit(sum((getattr(c, nome) for c in cs), ZERO), qtd) if qtd else None
+        if not qtd or self.fator_unidade is None:
+            return None
+        return _unit(sum((getattr(c, nome) for c in cs), ZERO) * self.fator_unidade, qtd)
 
     @property
     def preco_venda_unit(self) -> Decimal | None:

@@ -11,12 +11,32 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import pkcs12
 
 os.environ.setdefault("RTP_CHAVE_CRIPTO", Fernet.generate_key().decode())
+os.environ["RTP_AQUECER_ANALISES"] = "false"
 
 from app import db  # noqa: E402
 from app.calculadora.client import AliquotaEfetiva  # noqa: E402
 
 FX = Path(__file__).parent / "fixtures"
 CNPJ_EMPRESA = "11222333000181"
+SENHA_TESTE = "senha-de-teste-1"
+
+
+def cliente_logado(papel: str = "admin", raizes=(), email: str | None = None):
+    """TestClient com sessão aberta; cria o usuário se ainda não existe."""
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+
+    from app import auth, models
+    from app.api import main
+
+    email = email or f"{papel}@teste.com.br"
+    with db.sessao() as s:
+        if not s.scalar(select(models.Usuario).where(models.Usuario.email == email)):
+            auth.criar_usuario(s, papel.title(), email, SENHA_TESTE, papel, raizes)
+    c = TestClient(main.app)
+    r = c.post("/login", data={"email": email, "senha": SENHA_TESTE}, follow_redirects=False)
+    assert r.status_code == 303, r.text
+    return c
 
 
 class CalculadoraFake:

@@ -116,3 +116,18 @@ def test_contrato_is_calculadora_real():
     assert res[fab].is_pct == D("10.00") and not res[fab].erro
     assert res[rev].is_pct == 0 and res[rev].is_nominal_pct == D("10.00")
     assert calc.imposto_seletivo(REFRI) and calc.imposto_seletivo("84713012") is None
+
+
+def test_aliquota_simulada_do_is_e_avisada():
+    """A calculadora oficial ainda devolve as alíquotas do IS como dados simulados: a análise não pode chamá-las de
+    oficiais."""
+    class ISSimulado(CalculadoraComIS):
+        def imposto_seletivo(self, ncm, data="2027-01-15"):
+            info = super().imposto_seletivo(ncm, data)
+            return {**info, "simulado": True} if info else None
+
+    nota = _nota("entrada_fornecedor_normal.xml", "3" * 44, "5401")
+    oficial, simulado = _analise(CalculadoraComIS(), nota), _analise(ISSimulado(), nota)
+    assert not oficial.imposto_seletivo_simulado and any("alíquotas oficiais" in t for t in oficial.alertas)
+    assert simulado.imposto_seletivo_simulado
+    assert any("SIMULADAS" in t for t in simulado.alertas) and not any("alíquotas oficiais" in t for t in simulado.alertas)

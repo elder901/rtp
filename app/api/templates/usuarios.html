@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% macro checkboxes_empresas(empresas, marcadas) %}
+  <div class="opcoes">{% for x in empresas %}
+    <label class="check"><input type="checkbox" name="empresas" value="{{ x.raiz }}" {{ 'checked' if x.raiz in marcadas }}>
+      {{ x.nome }} <span class="suave">· raiz {{ x.raiz }}</span></label>{% else %}<span class="suave">Nenhuma empresa cadastrada.</span>{% endfor %}</div>
+{% endmacro %}
+{% block conteudo %}
+<div class="card">
+  <h2>Usuários</h2>
+  <p class="suave" style="margin-top:-6px"><b>Administrador</b>: todas as empresas, cadastra empresas e usuários.
+    <b>Gestor</b>: as empresas liberadas — inclui estabelecimentos, importa notas, classifica e cadastra usuários delas.
+    <b>Consulta</b>: só vê e exporta (ex.: comprador com a pauta de negociação).</p>
+  <div class="tabela"><table>
+    <tr><th class="txt">Nome</th><th class="txt">E-mail</th><th class="txt">Perfil</th><th class="txt">Empresas</th>
+        <th class="txt">Situação</th><th class="txt">Último acesso</th><th></th></tr>
+    {% for l in linhas %}
+    <tr><td class="txt">{{ l.u.nome }}</td><td class="txt">{{ l.u.email }}</td><td class="txt">{{ papeis[l.u.papel] }}</td>
+      <td class="txt">{% if l.u.papel == 'admin' %}todas{% else %}{% for r in l.raizes %}{{ nomes.get(r, r) }}{{ ', ' if not loop.last }}{% else %}—{% endfor %}{% endif %}</td>
+      <td class="txt">{{ 'ativo' if l.u.ativo else 'desativado' }}</td>
+      <td class="txt">{{ l.u.ultimo_acesso.strftime('%d/%m/%Y %H:%M') if l.u.ultimo_acesso else 'nunca' }}</td>
+      <td class="txt"><a href="/usuarios/{{ l.u.id }}">Editar</a></td></tr>
+    {% endfor %}
+  </table></div>
+</div>
+
+<div class="card" id="novo">
+  <h2>Novo usuário</h2>
+  {% if erro %}<div class="alerta" role="alert">{{ erro }}</div>{% endif %}
+  <form method="post" action="/usuarios">
+    <div class="grade">
+      <div><label for="nome">Nome</label><input id="nome" name="nome" value="{{ dados.nome or '' }}" required></div>
+      <div><label for="email">E-mail (é o login)</label><input id="email" name="email" type="email" value="{{ dados.email or '' }}" required></div>
+      <div><label for="senha">Senha inicial (mínimo 8)</label><input id="senha" name="senha" type="password" autocomplete="new-password" minlength="8" required></div>
+      <div><label for="papel">Perfil</label><select id="papel" name="papel">
+        {% for v, t in papeis.items() %}{% if usuario.admin or v != 'admin' %}
+        <option value="{{ v }}" {{ 'selected' if (dados.papel or 'consulta') == v }}>{{ t }}</option>{% endif %}{% endfor %}</select></div>
+    </div>
+    <h3 style="font-size:13px">Empresas que ele vê</h3>
+    {{ checkboxes_empresas(empresas, dados.empresas or []) }}
+    <p class="suave">O administrador vê todas, independentemente da marcação.</p>
+    <div class="acoes"><button type="submit">Criar usuário</button></div>
+  </form>
+</div>
+{% endblock %}

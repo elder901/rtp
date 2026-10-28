@@ -1,7 +1,6 @@
 from decimal import Decimal as D
 from pathlib import Path
 
-from fastapi.testclient import TestClient
 
 from app import classificacao, db, servicos
 from app.api import main
@@ -10,7 +9,7 @@ from app.engine.premissas import Premissas
 from app.ingest.arquivos import ler_caminho
 from app.parser.nfe import ler_nfe
 from app.produto import gtin_global
-from tests.conftest import CNPJ_EMPRESA, FX, CalculadoraFake
+from tests.conftest import CNPJ_EMPRESA, FX, CalculadoraFake, cliente_logado
 
 ARROZ, NOTEBOOK = "7890000000024", "7890000000017"
 
@@ -65,7 +64,7 @@ def test_aplicar_sugestoes_por_ean_e_substituir_ajuste_antigo(banco, monkeypatch
         servicos.importar_arquivos(s, e, [(p.name, p.read_bytes()) for p in (FX / "xml").glob("*.xml")])
         servicos.salvar_classificacao(s, e, "V-NB01", "000", "000001")          # formato antigo
         id_ = e.id
-    c = TestClient(main.app)
+    c = cliente_logado()
     r = c.post(f"/empresas/{id_}/classificacao/sugestoes-ean")
     assert "sugestão(ões) por EAN aplicada(s)" in r.text
     with db.sessao() as s:
