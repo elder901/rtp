@@ -2,6 +2,10 @@
 
   python -m app.cli empresa criar --cnpj 11222333000181 --nome "Loja" --regime real --uf SP --municipio 3550308
   python -m app.cli empresa listar
+  python -m app.cli empresa excluir --cnpj 11222333000181 --confirmar 11222333000181   (apaga o estabelecimento e os dados)
+  python -m app.cli backup --destino E:/RTP/backup [--manter 7]      (cópia do banco, consistente com o servidor ligado)
+  python -m app.cli revisao-classificacao --raiz 25735465 --saida relatorios/revisao.xlsx
+      (produtos por venda com a classificação usada; marca as presumidas para o fiscal confirmar)
   python -m app.cli usuarios criar --email admin@empresa.com.br --nome "Fulana" --papel admin   (senha pedida no terminal)
   python -m app.cli usuarios criar --email comprador@cliente.com.br --nome "Ciclano" --papel consulta --empresas 25735465
   python -m app.cli usuarios senha --email comprador@cliente.com.br      |      python -m app.cli usuarios listar
@@ -86,10 +90,43 @@ def cmd_empresa(a):
             except ValueError as erro:
                 sys.exit(str(erro))
             print(f"Empresa {e.cnpj} criada (id {e.id}).")
+        elif a.acao == "excluir":
+            from app.manutencao import excluir_estabelecimento
+
+            e = _empresa(s, a.cnpj)
+            if servicos.so_digitos(a.confirmar or "") != e.cnpj:
+                sys.exit(f"Para apagar {e.nome} e todos os dados dele, repita o CNPJ em --confirmar {e.cnpj}.")
+            nome = e.nome
+            apagadas = excluir_estabelecimento(s, e)
+            print(f"{nome} ({a.cnpj}) apagado: " + ", ".join(f"{k} {v}" for k, v in apagadas.items()))
         else:
             for e in s.scalars(select(models.Empresa).order_by(models.Empresa.nome)):
                 cert = f"certificado até {e.certificado.validade:%d/%m/%Y}" if e.certificado else "sem certificado"
                 print(f"{e.cnpj}  {e.nome:<40} {e.regime:<10} {e.uf}  {cert}")
+
+
+def cmd_revisao_classificacao(a):
+    from app.relatorios import revisao
+
+    with db.sessao() as s:
+        empresas = servicos.estabelecimentos_da_raiz(s, a.raiz)
+        if not empresas:
+            sys.exit(f"Nenhuma empresa com a raiz {a.raiz}.")
+        print(f"Montando a análise de {empresas[0].nome.strip()} ({len(empresas)} estabelecimento(s))...")
+        analise = servicos.montar_analise_grupo(s, empresas, CalculadoraRTC())
+    a.saida.parent.mkdir(parents=True, exist_ok=True)
+    n = revisao.exportar(analise, a.saida, f"Revisão de classificação — {empresas[0].nome.strip()}")
+    print(f"Planilha gravada em {a.saida}: {n} produto(s) a confirmar.")
+
+
+def cmd_backup(a):
+    from app.manutencao import fazer_backup
+
+    try:
+        arquivo = fazer_backup(a.destino, a.manter)
+    except ValueError as erro:
+        sys.exit(str(erro))
+    print(f"Backup gravado em {arquivo} ({arquivo.stat().st_size / 1e6:.0f} MB).")
 
 
 def cmd_importar(a):
@@ -482,7 +519,8 @@ def main(argv: list[str] | None = None):
     sub = p.add_subparsers(dest="comando", required=True)
 
     pe = sub.add_parser("empresa", help="cadastrar ou listar empresas")
-    pe.add_argument("acao", choices=["criar", "listar"])
+    pe.add_argument("acao", choices=["criar", "listar", "excluir"])
+    pe.add_argument("--confirmar", help="excluir: repita o CNPJ para confirmar")
     pe.add_argument("--cnpj")
     pe.add_argument("--nome", default="")
     pe.add_argument("--regime", choices=["real", "presumido", "simples"])
@@ -568,6 +606,16 @@ def main(argv: list[str] | None = None):
     pp.add_argument("--pa-fim", help="AAAA-MM")
     pp.add_argument("--saida", type=Path)
     pp.set_defaults(func=cmd_apuracao)
+
+    pv = sub.add_parser("revisao-classificacao", help="planilha de produtos por venda para a revisão fiscal")
+    pv.add_argument("--raiz", required=True, help="8 primeiros dígitos do CNPJ")
+    pv.add_argument("--saida", type=Path, required=True)
+    pv.set_defaults(func=cmd_revisao_classificacao)
+
+    pb = sub.add_parser("backup", help="cópia de segurança do banco SQLite")
+    pb.add_argument("--destino", type=Path, default=Path("dados/backup"))
+    pb.add_argument("--manter", type=int, default=7, help="quantas cópias guardar (as mais antigas são apagadas)")
+    pb.set_defaults(func=cmd_backup)
 
     pu = sub.add_parser("usuarios", help="usuários da interface web: listar, criar, redefinir senha")
     pu.add_argument("acao", choices=["listar", "criar", "senha"])
