@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from app import db, models, servicos
 from app.ingest import flex_banco
+from app.ingest.consolidacao import de_json
 from app.parser.nfe import ler_nfe
 from tests.conftest import CNPJ_EMPRESA, FX
 
@@ -106,3 +107,66 @@ def test_consolida_mes_a_partir_dos_arquivos_dos_dias(tmp_path, banco):
     with db.sessao() as s:
         [reg] = s.scalars(select(models.ConsolidadoNFCe))
         assert (reg.competencia, reg.cupons, reg.cancelados) == ("2026-03", 1, 2)
+
+
+def _cupom_de_outubro(numero: int, dia: int) -> bytes:
+    """Cupom emitido no dia de out/2026, o mês da chave do arquivo de exemplo, com código de produto numérico como no
+    Flex."""
+    return _cupom(numero).replace(b"<dhEmi>2026-03-20", f"<dhEmi>2026-10-{dia:02d}".encode()).replace(
+        b"<cProd>V-NB01", b"<cProd>1001")
+
+
+def _gravar_backup(pasta, dia: int, xml: bytes, cancelamento: bool = False):
+    """Como o PDV guarda: AAAAMMDD/Autorização/<chave>-nfce-dist.xml e .../Cancelamento/<chave>-nfce-canc.xml."""
+    chave = ler_nfe(xml if not cancelamento else _cupom(1)).chave if not cancelamento else None
+    sub, sufixo = ("Cancelamento", "canc") if cancelamento else ("Autorização", "dist")
+    destino = pasta / f"202610{dia:02d}" / sub
+    destino.mkdir(parents=True, exist_ok=True)
+    nome = chave or xml.split(b"<chNFe>")[1][:44].decode()
+    (destino / f"NFe{nome}-nfce-{sufixo}.xml").write_bytes(xml)
+
+
+def test_pasta_do_backup_do_pdv(tmp_path):
+    a, b, c = _cupom_de_outubro(1, 1), _cupom_de_outubro(2, 1), _cupom_de_outubro(3, 2)
+    for dia, xml in ((1, a), (1, b), (2, c)):
+        _gravar_backup(tmp_path, dia, xml)
+    _gravar_backup(tmp_path / "copia", 1, a)                          # o mesmo cupom em outra subpasta conta uma vez
+    _gravar_backup(tmp_path, 2, _cancelamento(b), cancelamento=True)
+    res = flex_banco.consolidar_mes(flex_banco.FontePasta(tmp_path), CNPJ_EMPRESA, "", 2026, 10, paralelo=1)
+    assert (res.cupons, res.cancelados, res.ilegiveis) == (2, 1, 0)
+    assert res.mes.valor == 2 * sum(i.valor_operacao for i in ler_nfe(a).itens)
+    so_dia_1 = flex_banco.consolidar_mes(flex_banco.FontePasta(tmp_path, ate=date(2026, 10, 1)), CNPJ_EMPRESA, "",
+                                         2026, 10, paralelo=1)
+    assert so_dia_1.cupons == 1
+    assert flex_banco.consolidar_mes(flex_banco.FontePasta(tmp_path), CNPJ_EMPRESA, "", 2026, 9, paralelo=1).mes is None
+
+
+def test_mes_da_pasta_completado_pelo_erp_e_conferido_com_o_total(tmp_path, banco):
+    import json
+    from decimal import Decimal as D
+
+    import pytest
+
+    from tests.test_erp_vendas import _linha
+
+    a, b = _cupom_de_outubro(1, 1), _cupom_de_outubro(2, 2)
+    _gravar_backup(tmp_path / "xml", 1, a)
+    _gravar_backup(tmp_path / "xml", 2, b)                            # dia 2 veio pela metade: fica de fora
+    um = ler_nfe(a)
+    codigo = um.itens[0].codigo
+    erp = tmp_path / "erp.json"                                       # dia 2 pela venda do ERP
+    erp.write_text(json.dumps({"rows": [_linha("2026-10", codigo, "060", "7.00", descricao="NOME DO CADASTRO")]}),
+                   encoding="utf-8")
+    valor_xml = sum(i.valor_operacao for i in um.itens)
+    with db.sessao() as s:
+        e = servicos.criar_empresa(s, CNPJ_EMPRESA, "LOJA", "real", "SP", 3550308)
+        with pytest.raises(ValueError, match="NÃO gravado"):
+            servicos.importar_nfce_pasta(s, e, tmp_path / "xml", 2026, 10, ate=date(2026, 10, 1), erp=[erp],
+                                         cupons=(2, 0, "1.00"), paralelo=1, progresso=lambda _: None)
+        assert not list(s.scalars(select(models.ConsolidadoNFCe)))
+        servicos.importar_nfce_pasta(s, e, tmp_path / "xml", 2026, 10, ate=date(2026, 10, 1), erp=[erp],
+                                     cupons=(2, 0, str(valor_xml + D("7.00"))), paralelo=1, progresso=lambda _: None)
+        [reg] = s.scalars(select(models.ConsolidadoNFCe))
+        assert (reg.competencia, reg.cupons, reg.origem) == ("2026-10", 2, "pasta:1 XMLs+erp")
+        do_erp = [i for i in de_json(reg.itens_gz).itens.values() if i.valor_operacao == D("7.00")]
+        assert do_erp[0].descricao == um.itens[0].descricao             # o tratamento do próprio cupom da loja

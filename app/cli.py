@@ -125,6 +125,25 @@ def cmd_importar_vendas_erp(a):
         servicos.importar_vendas_erp(s, _empresa(s, a.cnpj), a.arquivos, cupons)
 
 
+def cmd_importar_nfce_pasta(a):
+    import json
+
+    ano, mes = a.mes
+    cupons = None
+    if a.cupons:
+        with open(a.cupons, encoding="utf-8") as f:
+            linha = next((l for l in json.load(f)["rows"] if l["mes"] == f"{ano}-{mes:02d}"), None)
+        if linha is None:
+            sys.exit(f"{a.cupons} não tem a linha do mês {ano}-{mes:02d}.")
+        cupons = (int(linha["autorizados"]), int(linha["cancelados"]), *([linha["total"]] if linha.get("total") else []))
+    with db.sessao() as s:
+        try:
+            servicos.importar_nfce_pasta(s, _empresa(s, a.cnpj), a.pasta, ano, mes, a.de, a.ate, a.erp, cupons,
+                                         a.paralelo)
+        except ValueError as erro:
+            sys.exit(str(erro))
+
+
 def cmd_revisao_classificacao(a):
     from app.relatorios import revisao
 
@@ -633,6 +652,18 @@ def main(argv: list[str] | None = None):
     pr2.add_argument("--consulta", nargs=3, metavar=("UNIDADE", "INICIO", "FIM"), help="só mostra o SQL a rodar")
     pr2.add_argument("arquivos", nargs="*", type=Path)
     pr2.set_defaults(func=cmd_importar_vendas_erp)
+
+    pn = sub.add_parser("importar-nfce-pasta", help="NFC-e de um mês a partir de uma pasta de XMLs (backup do PDV)")
+    pn.add_argument("--cnpj", required=True)
+    pn.add_argument("--mes", required=True, type=_mes, help="AAAA-MM")
+    pn.add_argument("--de", type=date.fromisoformat, help="primeiro dia de emissão aproveitado dos XMLs")
+    pn.add_argument("--ate", type=date.fromisoformat, help="último dia de emissão aproveitado dos XMLs")
+    pn.add_argument("--erp", nargs="+", type=Path, default=(),
+                    help="resultados da consulta de importar-vendas-erp só com os dias fora de --de/--ate")
+    pn.add_argument("--cupons", type=Path, help="resultado JSON com mes, autorizados, cancelados, total (movnfce)")
+    pn.add_argument("--paralelo", type=int, help="processos para ler os cupons (padrão: núcleos - 1)")
+    pn.add_argument("pasta", type=Path)
+    pn.set_defaults(func=cmd_importar_nfce_pasta)
 
     pv = sub.add_parser("revisao-classificacao", help="planilha de produtos por venda para a revisão fiscal")
     pv.add_argument("--raiz", required=True, help="8 primeiros dígitos do CNPJ")

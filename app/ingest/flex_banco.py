@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import deque
 from collections.abc import Iterable, Iterator
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 
 from app.ingest.consolidacao import MesNFCe
 from app.ingest.flex import chave_cancelada, decodificar
@@ -124,6 +126,55 @@ class FonteArquivos(FonteFlex):
             for linha in dados.get("rows") or []:
                 if linha.get("xml_status") == status and linha.get("xml_conteudo"):
                     yield linha["xml_conteudo"]
+
+
+_CHAVE_NO_NOME = re.compile(r"(\d{44})")
+_EMISSAO = re.compile(r"<dhEmi>(\d{4})-(\d{2})-(\d{2})")
+
+
+class FontePasta(FonteFlex):
+    """No lugar da conexão: uma pasta com os XMLs das NFC-e, um arquivo por cupom, como o PDV guarda no backup
+    (subpastas por dia; `<chave>-nfce-dist.xml` para o cupom e `<chave>-nfce-canc.xml` para o cancelamento), em
+    qualquer profundidade. Arquivo com "canc" no nome é cancelamento; a chave no nome evita abrir os cupons de outro
+    mês e conta uma vez o cupom repetido. `de`/`ate` limitam os dias de emissão aproveitados (ex.: tirar o último dia
+    da cópia, que veio pela metade, para completá-lo pelo ERP)."""
+
+    def __init__(self, pasta: Path, de: date | None = None, ate: date | None = None):
+        super().__init__()
+        self.pasta, self.de, self.ate = Path(pasta), de, ate
+        self._arquivos: list[tuple[Path, str | None, bool]] | None = None
+
+    def _listar(self) -> list[tuple[Path, str | None, bool]]:
+        """(arquivo, chave do nome, é cancelamento), sem abrir os arquivos."""
+        if self._arquivos is None:
+            self._arquivos = []
+            for arq in sorted(self.pasta.rglob("*.xml")):
+                m = _CHAVE_NO_NOME.search(arq.name)
+                self._arquivos.append((arq, m.group(1) if m else None, "canc" in arq.name.lower()))
+        return self._arquivos
+
+    def existe_tabela_nfce(self, ano: int, mes: int) -> bool:
+        return self.pasta.is_dir()
+
+    def _no_periodo(self, xml: str, ano: int, mes: int) -> bool:
+        m = _EMISSAO.search(xml)
+        if not m:
+            return True                    # ilegível: o consolidador conta
+        dia = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        return (dia.year, dia.month) == (ano, mes) and not (self.de and dia < self.de or self.ate and dia > self.ate)
+
+    def nfce(self, ano: int, mes: int, unidade: str, status: str) -> Iterator[str]:
+        aamm, vistos = f"{ano % 100:02d}{mes:02d}", set()
+        for arq, chave, cancelamento in self._listar():
+            if cancelamento != (status == "C"):
+                continue
+            if status == "V" and chave:
+                if chave[2:6] != aamm or chave in vistos:
+                    continue
+                vistos.add(chave)
+            xml = arq.read_bytes().decode("utf-8-sig", errors="replace")
+            if status == "C" or self._no_periodo(xml, ano, mes):
+                yield xml
 
 
 @dataclass

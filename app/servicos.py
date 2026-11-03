@@ -5,6 +5,7 @@ import gzip
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from decimal import Decimal
+from pathlib import Path
 
 from sqlalchemy import and_, delete, func, insert, not_, or_, select
 from sqlalchemy.orm import Session
@@ -301,11 +302,7 @@ def importar_vendas_erp(s: Session, e: models.Empresa, arquivos, cupons: dict[st
     NFC-e autorizadas]); com o total, o mês que não bate (diferença > 0,1%) não é gravado."""
     from app.ingest import erp_vendas
 
-    outras = [o for o in estabelecimentos_da_raiz(s, raiz_cnpj(e.cnpj)) if o.id != e.id]
-    consolidados = [de_json(c.itens_gz) for c in s.scalars(select(models.ConsolidadoNFCe).where(
-        models.ConsolidadoNFCe.empresa_id.in_([o.id for o in outras])))]
-    referencia = erp_vendas.referencias(consolidados)
-    razao = consolidados[0].emitente.nome if consolidados else e.nome
+    referencia, razao = _referencias_erp(s, e)
     emitente = Participante(e.cnpj, razao, e.uf, str(e.cod_municipio), crt="1" if e.regime == "simples" else "3")
     relatorio: list[str] = []
     por_mes = erp_vendas.ler_resultados(arquivos, relatorio)
@@ -319,12 +316,70 @@ def importar_vendas_erp(s: Session, e: models.Empresa, arquivos, cupons: dict[st
                              f"autorizadas R$ {Decimal(str(total[0])):,.2f}.")
             progresso(relatorio[-1])
             continue
-        gravar_consolidado_nfce(s, e, competencia, mes, "erp:movprodd EVP (PDV sem XML)", cancelados)
+        gravar_consolidado_nfce(s, e, competencia, mes, f"{ORIGEM_ERP}movprodd EVP (PDV sem XML)", cancelados)
         linha = (f"{competencia}: {len(mes.itens)} produto(s), R$ {mes.valor:,.2f}, {autorizados} cupom(ns); "
-                 f"R$ {sem_referencia:,.2f} sem referência nas outras lojas")
+                 f"R$ {sem_referencia:,.2f} sem referência nos cupons")
         relatorio.append(linha)
         progresso(linha)
     return relatorio
+
+
+ORIGEM_ERP = "erp:"
+
+
+def _referencias_erp(s: Session, e: models.Empresa, proprios: list[MesNFCe] = ()) -> tuple[dict, str]:
+    """Tratamento de referência por produto para a venda vinda do ERP: o dos cupons da própria loja (meses com XML e
+    `proprios`) acima do das outras lojas da empresa. Devolve também a razão social como sai nas NFC-e."""
+    from app.ingest import erp_vendas
+
+    C = models.ConsolidadoNFCe
+    ids = [o.id for o in estabelecimentos_da_raiz(s, raiz_cnpj(e.cnpj))]
+    outras, da_loja = [], list(proprios)
+    for c in s.scalars(select(C).where(C.empresa_id.in_(ids))):
+        if c.empresa_id != e.id:
+            outras.append(de_json(c.itens_gz))
+        elif not (c.origem or "").startswith(ORIGEM_ERP):
+            da_loja.append(de_json(c.itens_gz))
+    referencia = {**erp_vendas.referencias(outras), **erp_vendas.referencias(da_loja)}
+    nomes = [m.emitente.nome for m in da_loja + outras]
+    return referencia, nomes[0] if nomes else e.nome
+
+
+def importar_nfce_pasta(s: Session, e: models.Empresa, pasta: Path, ano: int, mes: int, de: date | None = None,
+                        ate: date | None = None, erp=(), cupons: tuple | None = None, paralelo: int | None = None,
+                        progresso=print) -> str:
+    """Grava o mês das NFC-e da loja a partir de uma pasta de XMLs (ingest/flex_banco.FontePasta), substituindo o
+    consolidado do mês. Os dias sem XML (`de`/`ate` de fora) vêm da venda do ERP (`erp`: resultados da consulta de
+    ingest/erp_vendas.py só desses dias). `cupons`: (autorizados, cancelados[, valor total das NFC-e autorizadas]) do
+    mês; com o total, o mês que não bate (diferença > 0,1%) não é gravado. Devolve a linha do relatório."""
+    from app.ingest import erp_vendas
+    from app.ingest.flex_banco import FontePasta, consolidar_mes
+
+    competencia = f"{ano}-{mes:02d}"
+    res = consolidar_mes(FontePasta(pasta, de, ate), e.cnpj, "", ano, mes, paralelo)
+    if not res.mes:
+        raise ValueError(f"{competencia}: nenhum cupom do CNPJ {e.cnpj} em {pasta}.")
+    total_mes, origem = res.mes, f"pasta:{res.cupons} XMLs"
+    linha = (f"{competencia}: {res.cupons} cupons dos XMLs (R$ {res.mes.valor:,.2f}) | cancelados {res.cancelados} | "
+             f"ilegíveis {res.ilegiveis} | de outro CNPJ {res.outro_emitente}")
+    if erp:
+        linhas = erp_vendas.ler_resultados(erp).get(competencia) or []
+        if not linhas:
+            raise ValueError(f"{competencia}: os resultados do ERP não têm venda do mês.")
+        referencia, _ = _referencias_erp(s, e, [res.mes])
+        do_erp, sem_referencia = erp_vendas.consolidar(linhas, res.mes.emitente, referencia)
+        for it in do_erp.itens.values():
+            total_mes.adicionar_item(it)
+        origem += "+erp"
+        linha += f" | dias sem XML pelo ERP: R$ {do_erp.valor:,.2f} (R$ {sem_referencia:,.2f} sem referência)"
+    autorizados, cancelados, *total = cupons or (res.cupons, res.cancelados)
+    total_mes.cupons = autorizados
+    if total and abs(total_mes.valor - Decimal(str(total[0]))) > Decimal(str(total[0])) * Decimal("0.001"):
+        raise ValueError(f"{competencia}: NÃO gravado — R$ {total_mes.valor:,.2f} difere das NFC-e autorizadas "
+                         f"R$ {Decimal(str(total[0])):,.2f}. {linha}")
+    gravar_consolidado_nfce(s, e, competencia, total_mes, origem, cancelados, res.ilegiveis)
+    progresso(linha)
+    return linha
 
 
 def gravar_consolidado_nfce(s: Session, e: models.Empresa, competencia: str, mes: MesNFCe, origem: str,

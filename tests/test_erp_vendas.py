@@ -72,3 +72,27 @@ def test_resultado_cortado_perde_o_ultimo_mes_e_total_divergente_nao_grava(banco
         rel = servicos.importar_vendas_erp(s, e, [arquivo], {"2026-01": (5, 0, "99.00")}, progresso=lambda _: None)
         assert any("NÃO gravado" in r for r in rel)
         assert not list(s.scalars(servicos.select(servicos.models.ConsolidadoNFCe)))
+
+
+def test_tratamento_dos_cupons_da_propria_loja_vale_mais_que_o_das_outras(banco, tmp_path):
+    def mes(cnpj, pis_cst, descricao):
+        m = MesNFCe(Participante(cnpj, "LOJA LTDA", "MG", "3103504", crt="3"), 1)
+        m.adicionar_item(Item(n_item=1, codigo="5", descricao=descricao, ncm="22021000", cfop="5405", unidade="UN",
+                              quantidade=D("1"), v_prod=D("500"), pis_cst=pis_cst, icms_cst="60"))
+        return m
+
+    with db.sessao() as s:
+        outra = servicos.criar_empresa(s, "11222333000262", "LOJA 2", "real", "MG", 3103504)
+        e = servicos.criar_empresa(s, "11222333000181", "LOJA 1", "real", "MG", 3103504)
+        servicos.gravar_consolidado_nfce(s, outra, "2026-09", mes(outra.cnpj, "04", "Da outra"), "json")
+        servicos.gravar_consolidado_nfce(s, e, "2026-09", mes(e.cnpj, "06", "Da loja"), "pasta:1 XMLs")
+        servicos.gravar_consolidado_nfce(s, e, "2026-07", mes(e.cnpj, "01", "Do ERP"), "erp:movprodd")  # não serve
+    arquivo = tmp_path / "vendas.json"
+    arquivo.write_text(json.dumps({"rows": [_linha("2026-08", "5", "060", "50.00")]}), encoding="utf-8")
+    with db.sessao() as s:
+        e = s.get(servicos.models.Empresa, e.id)
+        servicos.importar_vendas_erp(s, e, [arquivo], progresso=lambda _: None)
+        reg = s.scalar(servicos.select(servicos.models.ConsolidadoNFCe).where(
+            servicos.models.ConsolidadoNFCe.empresa_id == e.id, servicos.models.ConsolidadoNFCe.competencia == "2026-08"))
+        item = next(iter(de_json(reg.itens_gz).itens.values()))
+        assert (item.pis_cst, item.descricao) == ("06", "Da loja")

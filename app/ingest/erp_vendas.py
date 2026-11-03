@@ -7,7 +7,9 @@ das NFC-e consolidadas; na 003, com o total das NFC-e autorizadas em movnfce.
 
 Do ERP vêm os valores (venda, desconto, quantidade, ICMS, FCP, PIS, COFINS), o CST de ICMS, NCM, EAN e unidade do
 cadastro. O que o ERP não guarda por item (CST de PIS/COFINS, descrição e unidade como saem na NFC-e) vem do mesmo
-produto nas NFC-e das outras lojas da empresa; sem essa referência, das alíquotas e do cadastro.
+produto nas NFC-e da própria loja, nos meses que têm XML (ex.: o backup de ~40 dias do PDV), ou, sem elas, nas das
+outras lojas da empresa; sem nenhuma referência, das alíquotas e do cadastro. Conferido em 21-30/09/2026, com os XMLs
+da 003: mesmo total ao centavo e o mesmo tratamento (NCM, CST de ICMS e de PIS/COFINS, CFOP) em 98,5% do valor.
 """
 from __future__ import annotations
 
