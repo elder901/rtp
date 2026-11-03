@@ -24,12 +24,20 @@ def test_sem_login_vai_para_a_tela_de_login(banco):
     assert c.get("/saude").status_code == 200
 
 
+def test_paginas_automaticas_da_api_fechadas(banco):
+    c = TestClient(main.app)
+    assert [c.get(u).status_code for u in ("/docs", "/redoc", "/openapi.json")] == [404, 404, 404]
+
+
 def test_primeiro_acesso_so_na_maquina_do_servidor(banco):
     remoto = TestClient(main.app, client=("10.0.0.7", 5000))
     assert remoto.get("/login", follow_redirects=False).headers["location"] == "/primeiro-acesso"
     assert "só pode ser criado na própria" in remoto.get("/primeiro-acesso").text
     dados = {"nome": "Admin", "email": "Admin@Empresa.com.br", "senha": "segredo-123", "confirmacao": "segredo-123"}
     assert remoto.post("/primeiro-acesso", data=dados).status_code == 403
+
+    pelo_dominio = TestClient(main.app, client=("127.0.0.1", 5000), headers={"X-Forwarded-For": "200.1.2.3"})
+    assert pelo_dominio.post("/primeiro-acesso", data=dados).status_code == 403    # proxy local não conta
 
     local = TestClient(main.app, client=("127.0.0.1", 5000))
     assert "não confere" in local.post("/primeiro-acesso", data={**dados, "confirmacao": "outra-123"}).text

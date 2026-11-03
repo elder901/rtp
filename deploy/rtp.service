@@ -1,0 +1,16 @@
+[Unit]
+Description=RTP - Planejamento da Reforma Tributaria (telas)
+After=network-online.target rtp-calculadora.service
+Wants=network-online.target rtp-calculadora.service
+
+[Service]
+User=rtp
+WorkingDirectory=/opt/rtp
+EnvironmentFile=/opt/rtp/.env
+# Só para a própria máquina: quem atende a internet é o Caddy (HTTPS), que repassa o IP do usuário.
+ExecStart=/opt/rtp/.venv/bin/uvicorn app.api.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

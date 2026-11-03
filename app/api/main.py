@@ -72,7 +72,8 @@ def _garantir_calculadora_local():
     """Se o sistema aponta para a calculadora local instalada e ela está parada, inicia."""
     from app.calculadora import offline
 
-    if settings.calculadora_url.rstrip("/") != offline.url_local() or not offline.estado().get("versao_dir"):
+    if (not settings.calculadora_iniciar or settings.calculadora_url.rstrip("/") != offline.url_local()
+            or not offline.estado().get("versao_dir")):
         return
     try:
         offline.iniciar_atual()
@@ -157,8 +158,10 @@ def _exigir(request: Request, *papeis: str) -> auth.Logado:
     return u
 
 
+_docs = settings.documentacao_api
 app = FastAPI(title="RTP — Planejamento da Reforma Tributária", lifespan=ciclo_de_vida,
-              dependencies=[Depends(autenticar)])
+              dependencies=[Depends(autenticar)], docs_url="/docs" if _docs else None,
+              redoc_url="/redoc" if _docs else None, openapi_url="/openapi.json" if _docs else None)
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 
@@ -290,7 +293,10 @@ def entrar(request: Request, email: str = Form(...), senha: str = Form(...), pro
 
 
 def _primeiro_acesso_local(request: Request) -> bool:
-    return bool(request.client) and request.client.host in ENDERECOS_LOCAIS
+    """Só quem está na máquina do servidor, direto: o que chega pelo proxy do domínio (que fica na mesma máquina e
+    anota o cliente em X-Forwarded-For) também parece local e não vale."""
+    return (bool(request.client) and request.client.host in ENDERECOS_LOCAIS
+            and "x-forwarded-for" not in request.headers)
 
 
 @app.get("/primeiro-acesso", response_class=HTMLResponse)

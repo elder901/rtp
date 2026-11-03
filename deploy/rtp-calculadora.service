@@ -1,0 +1,14 @@
+[Unit]
+Description=RTP - Calculadora oficial de CBS/IBS (Receita Federal), local
+After=network-online.target
+
+[Service]
+User=rtp
+WorkingDirectory=/opt/rtp
+EnvironmentFile=/opt/rtp/.env
+ExecStart=/opt/rtp/.venv/bin/python -m app.cli calculadora executar
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

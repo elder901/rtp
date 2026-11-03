@@ -48,6 +48,10 @@ Testes (o teste contra a calculadora real só roda com `RTP_TESTE_ONLINE=1`):
 
 Configurações em variáveis de ambiente ou `.env` — veja `.env.example`.
 
+**Em produção** (servidor na nuvem com domínio e HTTPS, banco no Supabase, importação pelo PC do escritório): veja
+[deploy/LEIA-ME.md](deploy/LEIA-ME.md). `migrar-banco` copia o banco atual para outro vazio conferindo cada tabela;
+`backup` funciona nos dois bancos (sempre gera um arquivo SQLite).
+
 ## Notas fiscais
 
 - **SEFAZ (DF-e)** — `app/dfe/`: Distribuição de DF-e do Ambiente Nacional (NT 2014.002) com TLS mútuo pelo

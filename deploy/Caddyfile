@@ -1,0 +1,17 @@
+# HTTPS automático (Let's Encrypt) para o domínio; o RTP só escuta na própria máquina.
+{DOMINIO} {
+	encode gzip
+	reverse_proxy 127.0.0.1:8000 {
+		# a primeira tela depois de subir calcula a análise do grupo: pode levar minutos
+		transport http {
+			read_timeout 15m
+		}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+		-Server
+	}
+}

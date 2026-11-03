@@ -10,8 +10,14 @@ class Settings(BaseSettings):
     # A instância pública da Receita serve para desenvolvimento/validação.
     calculadora_url: str = "https://consumo.tributos.gov.br/servico/calcular-tributos-consumo/api"
     calculadora_timeout: float = 60.0
+    # Com a calculadora local instalada e parada, o servidor web a inicia. Desligue quando outro gerenciador a mantém
+    # no ar (ex.: o serviço rtp-calculadora no servidor Linux, deploy/).
+    calculadora_iniciar: bool = True
 
     database_url: str = "sqlite:///./dados/rtp.db"
+    # Banco para onde `python -m app.cli migrar-banco` copia o atual (ex.: o PostgreSQL do Supabase, com a senha
+    # codificada para URL). Fica no .env para a senha não passar pela linha de comando.
+    database_url_destino: str = ""
 
     # DF-e: liga a sincronização automática dentro do servidor web (senão, use `python -m app.cli dfe`).
     dfe_agendador: bool = False
@@ -38,6 +44,10 @@ class Settings(BaseSettings):
     # Ao subir o servidor, calcula em segundo plano a análise de cada empresa com filiais (período padrão): é a tela
     # que o comercial abre, e o cálculo leva minutos.
     aquecer_analises: bool = True
+
+    # Páginas automáticas da API (/docs, /redoc, /openapi.json). Ficam fora do controle de login: desligadas, a não ser
+    # para desenvolvimento.
+    documentacao_api: bool = False
 
 
 settings = Settings()

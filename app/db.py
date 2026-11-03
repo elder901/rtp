@@ -14,13 +14,23 @@ class Base(DeclarativeBase):
     pass
 
 
+def url_sqlalchemy(url: str) -> str:
+    """O endereço como o Supabase/PostgreSQL mostra (postgresql://...) com o driver instalado, o psycopg 3."""
+    for prefixo in ("postgres://", "postgresql://"):
+        if url.startswith(prefixo):
+            return "postgresql+psycopg://" + url.removeprefix(prefixo)
+    return url
+
+
 def _engine(url: str):
-    kwargs = {}
+    url, kwargs = url_sqlalchemy(url), {}
     if url.startswith("sqlite"):
         kwargs["connect_args"] = {"check_same_thread": False}
         caminho = url.removeprefix("sqlite:///")
         if caminho and caminho != ":memory:":
             Path(caminho).parent.mkdir(parents=True, exist_ok=True)
+    else:
+        kwargs["pool_pre_ping"] = True          # banco na nuvem: conexão parada há tempo pode ter caído
     return create_engine(url, **kwargs)
 
 

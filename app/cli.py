@@ -168,6 +168,22 @@ def cmd_backup(a):
     print(f"Backup gravado em {arquivo} ({arquivo.stat().st_size / 1e6:.0f} MB).")
 
 
+def cmd_migrar_banco(a):
+    from app.config import settings
+    from app.manutencao import ErroCopia, copiar_banco
+
+    if not settings.database_url_destino:
+        sys.exit("Defina RTP_DATABASE_URL_DESTINO no arquivo .env com o endereço do banco novo (vazio).")
+    destino = settings.database_url_destino.split("@")[-1]                  # sem usuário e senha na tela
+    print(f"Copiando o banco atual para {destino} ...")
+    try:
+        linhas = copiar_banco(settings.database_url, settings.database_url_destino, print)
+    except ErroCopia as erro:
+        sys.exit(str(erro))
+    print(f"Pronto: {sum(linhas.values())} linha(s) em {len(linhas)} tabela(s), contagens conferidas. Para usar o "
+          f"banco novo, troque RTP_DATABASE_URL no .env pelo endereço de RTP_DATABASE_URL_DESTINO.")
+
+
 def cmd_importar(a):
     with db.sessao() as s:
         e = _empresa(s, a.cnpj)
@@ -670,7 +686,10 @@ def main(argv: list[str] | None = None):
     pv.add_argument("--saida", type=Path, required=True)
     pv.set_defaults(func=cmd_revisao_classificacao)
 
-    pb = sub.add_parser("backup", help="cópia de segurança do banco SQLite")
+    pm = sub.add_parser("migrar-banco", help="copiar o banco atual para outro vazio (ex.: Supabase), conferindo")
+    pm.set_defaults(func=cmd_migrar_banco)
+
+    pb = sub.add_parser("backup", help="cópia de segurança do banco (SQLite ou PostgreSQL) num arquivo SQLite")
     pb.add_argument("--destino", type=Path, default=Path("dados/backup"))
     pb.add_argument("--manter", type=int, default=7, help="quantas cópias guardar (as mais antigas são apagadas)")
     pb.set_defaults(func=cmd_backup)
